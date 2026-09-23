@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "skillId": "skill_order_food_address",
+  "name": "Order Food Custom Address",
+  "intent": "Order food to specified address",
+  "appContext": "com.example.fooddelivery",
+  "slots": [
+    {
+      "schemaVersion": "1.0",
+      "name": "delivery_address",
+      "type": "ADDRESS",
+      "required": true,
+      "exampleValue": "456 Koramangala, Bangalore",
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    }
+  ],
+  "steps": [],
+  "safetyBoundary": {
+    "schemaVersion": "1.0",
+    "requiresExplicitUserConfirmation": true
+  }
+}

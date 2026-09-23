@@ -1,0 +1,128 @@
+{
+  "schemaVersion": "1.0",
+  "skillId": "skill_order_food_001",
+  "name": "Order Food Workflow",
+  "intent": "Order food from food app",
+  "appContext": "com.example.fooddelivery",
+  "slots": [
+    {
+      "schemaVersion": "1.0",
+      "name": "item_name",
+      "type": "TEXT",
+      "required": true,
+      "exampleValue": "Margherita Pizza",
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    },
+    {
+      "schemaVersion": "1.0",
+      "name": "quantity",
+      "type": "INTEGER",
+      "required": false,
+      "exampleValue": "2",
+      "confidence": 0.95,
+      "provenance": "inference"
+    },
+    {
+      "schemaVersion": "1.0",
+      "name": "delivery_address",
+      "type": "ADDRESS",
+      "required": true,
+      "exampleValue": "123 Tech Park, Bangalore",
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    }
+  ],
+  "steps": [
+    {
+      "schemaVersion": "1.0",
+      "stepId": "step_1_search",
+      "semanticAction": "INPUT_TEXT",
+      "semanticSelector": {
+        "schemaVersion": "1.0",
+        "role": "EditText",
+        "textSlot": "item_name",
+        "contentDescription": "Search dishes",
+        "resourceId": "com.example.fooddelivery:id/search_input",
+        "parentRole": "LinearLayout"
+      },
+      "parameters": {
+        "text": "{item_name}"
+      },
+      "preconditions": {
+        "schemaVersion": "1.0",
+        "requiredPackage": "com.example.fooddelivery"
+      },
+      "expectedTransition": {
+        "schemaVersion": "1.0",
+        "expectedPackage": "com.example.fooddelivery",
+        "timeoutMs": 3000
+      },
+      "recoveryPolicy": {
+        "schemaVersion": "1.0",
+        "maxRetries": 2,
+        "strategy": "HANDOFF_TO_USER"
+      },
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    },
+    {
+      "schemaVersion": "1.0",
+      "stepId": "step_2_add_to_cart",
+      "semanticAction": "CLICK",
+      "semanticSelector": {
+        "schemaVersion": "1.0",
+        "role": "Button",
+        "text": "ADD",
+        "contentDescription": "Add to Cart",
+        "resourceId": "com.example.fooddelivery:id/btn_add"
+      },
+      "preconditions": {
+        "schemaVersion": "1.0"
+      },
+      "expectedTransition": {
+        "schemaVersion": "1.0",
+        "timeoutMs": 3000
+      },
+      "recoveryPolicy": {
+        "schemaVersion": "1.0",
+        "maxRetries": 2,
+        "strategy": "HANDOFF_TO_USER"
+      },
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    },
+    {
+      "schemaVersion": "1.0",
+      "stepId": "step_3_checkout",
+      "semanticAction": "CLICK",
+      "semanticSelector": {
+        "schemaVersion": "1.0",
+        "role": "Button",
+        "text": "View Cart",
+        "contentDescription": "Checkout",
+        "resourceId": "com.example.fooddelivery:id/btn_checkout"
+      },
+      "preconditions": {
+        "schemaVersion": "1.0"
+      },
+      "expectedTransition": {
+        "schemaVersion": "1.0",
+        "timeoutMs": 5000
+      },
+      "recoveryPolicy": {
+        "schemaVersion": "1.0",
+        "maxRetries": 1,
+        "strategy": "HANDOFF_TO_USER"
+      },
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    }
+  ],
+  "safetyBoundary": {
+    "schemaVersion": "1.0",
+    "requiresExplicitUserConfirmation": true,
+    "sensitiveKeywords": ["PAY", "PLACE ORDER", "CREDIT CARD"],
+    "restrictedActions": ["FINAL_PAYMENT"]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0",
+  "skillId": "skill_order_food_quantity",
+  "name": "Order Food Custom Quantity",
+  "intent": "Order food with custom quantity",
+  "appContext": "com.example.fooddelivery",
+  "slots": [
+    {
+      "schemaVersion": "1.0",
+      "name": "item_name",
+      "type": "TEXT",
+      "required": true,
+      "exampleValue": "Pasta Alfredo",
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    },
+    {
+      "schemaVersion": "1.0",
+      "name": "quantity",
+      "type": "INTEGER",
+      "required": true,
+      "exampleValue": "3",
+      "confidence": 0.95,
+      "provenance": "inference"
+    }
+  ],
+  "steps": [],
+  "safetyBoundary": {
+    "schemaVersion": "1.0",
+    "requiresExplicitUserConfirmation": true
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0",
+  "stateId": "ui_state_001",
+  "timestamp": 1700000000000,
+  "appContext": "com.example.fooddelivery",
+  "windowId": 1,
+  "rootElement": {
+    "schemaVersion": "1.0",
+    "elementId": "root_0",
+    "role": "FrameLayout",
+    "isClickable": false,
+    "children": [
+      {
+        "schemaVersion": "1.0",
+        "elementId": "elem_search",
+        "role": "EditText",
+        "text": "Search for food...",
+        "resourceId": "com.example.fooddelivery:id/search_input",
+        "isClickable": true,
+        "isEditable": true
+      }
+    ]
+  },
+  "allElements": [
+    {
+      "schemaVersion": "1.0",
+      "elementId": "elem_search",
+      "role": "EditText",
+      "text": "Search for food...",
+      "resourceId": "com.example.fooddelivery:id/search_input",
+      "isClickable": true,
+      "isEditable": true
+    }
+  ]
+}

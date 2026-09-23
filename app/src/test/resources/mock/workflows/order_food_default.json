@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "skillId": "skill_order_food_default",
+  "name": "Order Food Default",
+  "intent": "Order default meal",
+  "appContext": "com.example.fooddelivery",
+  "slots": [
+    {
+      "schemaVersion": "1.0",
+      "name": "item_name",
+      "type": "TEXT",
+      "required": true,
+      "exampleValue": "Veg Burger",
+      "confidence": 1.0,
+      "provenance": "demonstration"
+    }
+  ],
+  "steps": [],
+  "safetyBoundary": {
+    "schemaVersion": "1.0",
+    "requiresExplicitUserConfirmation": true
+  }
+}

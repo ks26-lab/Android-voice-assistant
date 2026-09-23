@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "expectedPackage": "com.example.fooddelivery",
+  "expectedElementAppeared": {
+    "schemaVersion": "1.0",
+    "role": "Button",
+    "text": "Checkout"
+  },
+  "timeoutMs": 3000
+}

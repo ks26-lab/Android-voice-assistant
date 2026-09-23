@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "skillId": "skill_order_food_changed_item",
+  "name": "Order Food Changed Item",
+  "intent": "Order specific changed item from food app",
+  "appContext": "com.example.fooddelivery",
+  "slots": [
+    {
+      "schemaVersion": "1.0",
+      "name": "item_name",
+      "type": "TEXT",
+      "required": true,
+      "exampleValue": "Paneer Tikka Roll",
+      "confidence": 0.98,
+      "provenance": "demonstration"
+    }
+  ],
+  "steps": [],
+  "safetyBoundary": {
+    "schemaVersion": "1.0",
+    "requiresExplicitUserConfirmation": true
+  }
+}

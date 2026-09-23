@@ -1,0 +1,7 @@
+{
+  "scenarioId": "scenario_food_order_01",
+  "title": "Demonstration and Replay of Food Ordering",
+  "appContext": "com.example.fooddelivery",
+  "userUtterance": "Order a Margherita Pizza to 123 Tech Park",
+  "expectedSkillId": "skill_order_food_001"
+}

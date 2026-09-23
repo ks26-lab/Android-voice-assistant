@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "executionId": "exec_req_1001",
+  "skillId": "skill_order_food_001",
+  "boundSlots": {
+    "item_name": "Margherita Pizza",
+    "quantity": "2",
+    "delivery_address": "123 Tech Park, Bangalore"
+  }
+}
