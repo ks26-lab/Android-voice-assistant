@@ -1,24 +1,37 @@
 package com.chockXlate.teachablevoice.app
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
-import android.text.InputType
+import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import com.chockXlate.teachablevoice.contract.event.ActionEvent
+import com.chockXlate.teachablevoice.app.service.TeachableVoiceAccessibilityService
+import com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter
+import com.chockXlate.teachablevoice.command.matching.SkillMatchStatus
+import com.chockXlate.teachablevoice.command.matching.SkillMatcher
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestBuildResult
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestBuilder
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus
+import com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest
+import com.chockXlate.teachablevoice.contract.runtime.ExecutionState
 import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
-import com.chockXlate.teachablevoice.contract.workflow.SemanticSelector
+import com.chockXlate.teachablevoice.runtime.trace.RuntimeReport
+import com.chockXlate.teachablevoice.skill.repository.SkillRepositoryProvider
 import com.chockXlate.teachablevoice.teach.capture.TeachingSessionManager
 import com.chockXlate.teachablevoice.teach.trace.TraceViewer
 import com.chockXlate.teachablevoice.teach.voice.VoiceCaptureController
-import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 
 /**
  * Demonstrable UI Activity for Person 1 Phase 1: Teaching Capture.
@@ -32,7 +45,6 @@ class TeachingDemoActivity : Activity() {
     private lateinit var skillNameInput: EditText
     private lateinit var intentInput: EditText
     private lateinit var voiceInput: EditText
-    private lateinit var dishSearchInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,7 +60,7 @@ class TeachingDemoActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "Teachable Voice Automation\nPerson 1 — Phase 1 Teaching Capture Demo"
+            text = "Teachable Voice Automation\nOne-Shot Semantic Workflow Learning"
             textSize = 18f
             setTextColor(Color.WHITE)
             setTypeface(null, Typeface.BOLD)
@@ -73,25 +85,20 @@ class TeachingDemoActivity : Activity() {
         }
 
         skillNameInput = EditText(this).apply {
-            hint = "Skill Name (e.g. order_food)"
+            hint = "Skill name"
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
-            setText("order_food")
+
         }
         setupCard.addView(skillNameInput)
 
         intentInput = EditText(this).apply {
-            hint = "Intent (e.g. Order food from app)"
+            hint = "Describe the task"
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
-            setText("Order food from app")
+
         }
         setupCard.addView(intentInput)
-
-        val sessionButtonsLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 0)
-        }
 
         val startBtn = Button(this).apply {
             text = "START TEACHING"
@@ -99,7 +106,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { startTeachingSession() }
         }
-        sessionButtonsLayout.addView(startBtn)
 
         val stopBtn = Button(this).apply {
             text = "STOP TEACHING"
@@ -107,7 +113,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { stopTeachingSession() }
         }
-        sessionButtonsLayout.addView(stopBtn)
 
         val normalizeBtn = Button(this).apply {
             text = "NORMALIZE TRACE (PHASE 2)"
@@ -115,7 +120,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { normalizeCurrentTrace() }
         }
-        sessionButtonsLayout.addView(normalizeBtn)
 
         val semanticBtn = Button(this).apply {
             text = "EXTRACT SEMANTIC ACTIONS (PHASE 3)"
@@ -123,7 +127,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractSemanticActionsPhase3() }
         }
-        sessionButtonsLayout.addView(semanticBtn)
 
         val intentBtn = Button(this).apply {
             text = "EXTRACT INTENT (PHASE 4)"
@@ -131,7 +134,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractIntentPhase4() }
         }
-        sessionButtonsLayout.addView(intentBtn)
 
         val slotsBtn = Button(this).apply {
             text = "EXTRACT SLOTS (PHASE 5)"
@@ -139,7 +141,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractSlotsPhase5() }
         }
-        sessionButtonsLayout.addView(slotsBtn)
 
         val alignInferBtn = Button(this).apply {
             text = "ALIGN & INFER VARIABLES (PHASE 6)"
@@ -147,7 +148,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { alignAndInferVariablesPhase6() }
         }
-        sessionButtonsLayout.addView(alignInferBtn)
 
         val synthesizeBtn = Button(this).apply {
             text = "SYNTHESIZE WORKFLOW (PHASE 7)"
@@ -155,7 +155,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { synthesizeWorkflowPhase7() }
         }
-        sessionButtonsLayout.addView(synthesizeBtn)
 
         val validateStoreBtn = Button(this).apply {
             text = "VALIDATE & STORE SKILL (PHASE 8)"
@@ -163,7 +162,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { validateAndStoreSkillPhase8() }
         }
-        sessionButtonsLayout.addView(validateStoreBtn)
 
         val inspectBtn = Button(this).apply {
             text = "INSPECT STORED SKILL (PHASE 9)"
@@ -171,7 +169,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { inspectStoredSkillPhase9() }
         }
-        sessionButtonsLayout.addView(inspectBtn)
 
         val understandCmdBtn = Button(this).apply {
             text = "UNDERSTAND NEW COMMAND (PHASE 10)"
@@ -179,7 +176,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { understandNewCommandPhase10() }
         }
-        sessionButtonsLayout.addView(understandCmdBtn)
 
         val matchSkillBtn = Button(this).apply {
             text = "MATCH COMMAND TO SKILL (PHASE 11)"
@@ -187,7 +183,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { matchCommandToSkillPhase11() }
         }
-        sessionButtonsLayout.addView(matchSkillBtn)
 
         val createRequestBtn = Button(this).apply {
             text = "CREATE EXECUTION REQUEST (PHASE 12)"
@@ -195,8 +190,68 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { createExecutionRequestPhase12() }
         }
-        sessionButtonsLayout.addView(createRequestBtn)
-        setupCard.addView(sessionButtonsLayout)
+
+        val executeRuntimeBtn = Button(this).apply {
+            text = "EXECUTE RUNTIME (PERSON 2)"
+            setBackgroundColor(Color.parseColor("#00897B"))
+            setTextColor(Color.WHITE)
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener { executeWithPerson2Runtime() }
+        }
+
+        val ackHandoffBtn = Button(this).apply {
+            text = "RESET / ACKNOWLEDGE HANDOFF"
+            setBackgroundColor(Color.parseColor("#FB8C00"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { acknowledgeHandoffAndReset() }
+        }
+
+        val cancelRuntimeBtn = Button(this).apply {
+            text = "CANCEL RUNTIME"
+            setBackgroundColor(Color.parseColor("#E53935"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { cancelRuntimeExecution() }
+        }
+
+        val accessibilitySettingsBtn = Button(this).apply {
+            text = "ACCESSIBILITY SETTINGS"
+            setBackgroundColor(Color.parseColor("#1E88E5"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { openAccessibilitySettings() }
+        }
+
+        fun createButtonRow(vararg buttons: Button): View {
+            val hScroll = HorizontalScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 4, 0, 4) }
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            for (btn in buttons) {
+                btn.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 8, 0) }
+                row.addView(btn)
+            }
+            hScroll.addView(row)
+            return hScroll
+        }
+
+        setupCard.addView(createButtonRow(startBtn, stopBtn))
+        setupCard.addView(createButtonRow(normalizeBtn, semanticBtn, intentBtn, slotsBtn, alignInferBtn, synthesizeBtn))
+        setupCard.addView(createButtonRow(validateStoreBtn, inspectBtn, understandCmdBtn, matchSkillBtn, createRequestBtn))
+        setupCard.addView(createButtonRow(executeRuntimeBtn, ackHandoffBtn, cancelRuntimeBtn, accessibilitySettingsBtn))
+        setupCard.addView(Button(this).apply {
+            text = "LAST RUN"
+            setOnClickListener {
+                runtimeEngine.lastReport?.let(::handleRuntimeReport)
+                    ?: run { traceInspectorTextView.text = "No runtime execution has completed yet." }
+            }
+        })
         rootLayout.addView(setupCard)
 
         // Interactive Voice Capture Section
@@ -206,98 +261,37 @@ class TeachingDemoActivity : Activity() {
         }
 
         voiceInput = EditText(this).apply {
-            hint = "Voice Command (e.g. Order a Margherita pizza)"
+            hint = "Teach or enter a new command"
             setHintTextColor(Color.GRAY)
             setTextColor(Color.WHITE)
-            setText("Order a Margherita pizza")
+
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.0f)
         }
         voiceSection.addView(voiceInput)
 
         val recordVoiceBtn = Button(this).apply {
-            text = "SPEAK"
+            text = "RECORD TYPED"
             setBackgroundColor(Color.parseColor("#1565C0"))
             setTextColor(Color.WHITE)
             setOnClickListener { recordVoiceUtterance() }
         }
         voiceSection.addView(recordVoiceBtn)
+        voiceSection.addView(Button(this).apply {
+            text = "MIC / STOP"
+            setOnClickListener { toggleSpeech() }
+        })
         rootLayout.addView(voiceSection)
 
-        // Interactive Target UI Section
-        val targetUiSection = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#263238"))
-            setPadding(24, 24, 24, 24)
-        }
-
-        val targetUiTitle = TextView(this).apply {
-            text = "Interactive Target App Area (Perform Teaching Actions):"
-            setTextColor(Color.parseColor("#80D8FF"))
-            setTypeface(null, Typeface.BOLD)
-        }
-        targetUiSection.addView(targetUiTitle)
-
-        dishSearchInput = EditText(this).apply {
-            hint = "Search dishes..."
-            setHintTextColor(Color.GRAY)
+        rootLayout.addView(TextView(this).apply {
+            text = "Teach in another app: start, record your description, switch apps and interact, then return to stop. Avoid credentials and payments."
             setTextColor(Color.WHITE)
-            setText("Pizza Palace")
-        }
-        targetUiSection.addView(dishSearchInput)
-
-        val searchDishBtn = Button(this).apply {
-            text = "Search Dish"
-            setBackgroundColor(Color.parseColor("#37474F"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                recordAction(
-                    actionType = "INPUT_TEXT",
-                    role = "EditText",
-                    text = "Search dishes...",
-                    resourceId = "com.example.foodapp:id/search_input",
-                    inputData = dishSearchInput.text.toString()
-                )
-            }
-        }
-        targetUiSection.addView(searchDishBtn)
-
-        val addPizzaBtn = Button(this).apply {
-            text = "ADD Pizza to Cart"
-            setBackgroundColor(Color.parseColor("#37474F"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                recordAction(
-                    actionType = "CLICK",
-                    role = "Button",
-                    text = "ADD",
-                    resourceId = "com.example.foodapp:id/btn_add"
-                )
-            }
-        }
-        targetUiSection.addView(addPizzaBtn)
-
-        val checkoutBtn = Button(this).apply {
-            text = "View Cart & Checkout"
-            setBackgroundColor(Color.parseColor("#37474F"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                recordAction(
-                    actionType = "CLICK",
-                    role = "Button",
-                    text = "View Cart",
-                    resourceId = "com.example.foodapp:id/btn_checkout"
-                )
-            }
-        }
-        targetUiSection.addView(checkoutBtn)
-        rootLayout.addView(targetUiSection)
+        })
 
         // Trace Inspector Output ScrollView
         val scrollView = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1.0f
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
             setPadding(0, 24, 0, 0)
         }
@@ -313,12 +307,17 @@ class TeachingDemoActivity : Activity() {
         scrollView.addView(traceInspectorTextView)
         rootLayout.addView(scrollView)
 
-        setContentView(rootLayout)
+        setContentView(ScrollView(this).apply { addView(rootLayout) })
     }
 
     private fun startTeachingSession() {
-        val skill = skillNameInput.text.toString().ifBlank { "order_food" }
-        val intent = intentInput.text.toString().ifBlank { "Order food from app" }
+        val skill = skillNameInput.text.toString().trim()
+        val intent = intentInput.text.toString().trim()
+        if (skill.isBlank() || intent.isBlank()) {
+            statusTextView.text = "Enter a skill name and task description first."
+            return
+        }
+        if (isExecuting.get()) return
 
         TeachingSessionManager.startSession(skill, intent)
         statusTextView.text = "STATUS: TEACHING ACTIVE (Skill: '$skill')"
@@ -331,40 +330,9 @@ class TeachingDemoActivity : Activity() {
             traceInspectorTextView.text = "WARNING: Click 'START TEACHING' before recording voice commands!"
             return
         }
-        val text = voiceInput.text.toString().ifBlank { "Order a pizza" }
-        val voiceEvent = VoiceCaptureController.recordUtterance(text)
-        updateLiveTraceDisplay()
-    }
-
-    private fun recordAction(
-        actionType: String,
-        role: String,
-        text: String,
-        resourceId: String,
-        inputData: String? = null
-    ) {
-        if (!TeachingSessionManager.isTeachingActive()) {
-            traceInspectorTextView.text = "WARNING: Click 'START TEACHING' before performing actions!"
-            return
-        }
-
-        val selector = SemanticSelector(
-            schemaVersion = "1.0",
-            role = role,
-            text = text,
-            resourceId = resourceId
-        )
-
-        val actionEvent = ActionEvent(
-            schemaVersion = "1.0",
-            actionId = UUID.randomUUID().toString(),
-            timestamp = System.currentTimeMillis(),
-            actionType = actionType,
-            semanticSelector = selector,
-            inputData = inputData
-        )
-
-        TeachingSessionManager.recordActionEvent(actionEvent)
+        val text = voiceInput.text.toString()
+        if (text.isBlank()) return
+        VoiceCaptureController.recordUtterance(text)
         updateLiveTraceDisplay()
     }
 
@@ -383,6 +351,7 @@ class TeachingDemoActivity : Activity() {
         val formattedTrace = TraceViewer.formatTrace(trace)
         traceInspectorTextView.text = formattedTrace
         lastCapturedTrace = trace
+        TeachableVoiceAccessibilityService.instance?.teachingWarning?.let { statusTextView.text = it }
     }
 
     private var lastCapturedTrace: DemonstrationTrace? = null
@@ -474,39 +443,13 @@ class TeachingDemoActivity : Activity() {
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
-            demonstrationId = "demo_01",
+            demonstrationId = norm1.normalizedTrace.traceId,
             traceId = norm1.normalizedTrace.traceId,
             intentResult = intent1,
             slotResult = slot1
         )
 
-        // Demo 2 processing (Simulated 2nd demonstration with different item & quantity)
-        val demo2Voice = com.chockXlate.teachablevoice.contract.event.VoiceEvent(
-            eventId = "v_demo2",
-            timestamp = System.currentTimeMillis(),
-            transcript = "Order 1 Farmhouse pizza from Pizza Palace to Home"
-        )
-        val trace2 = com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace(
-            traceId = "tr_demo2",
-            timestamp = System.currentTimeMillis(),
-            appContext = norm1.normalizedTrace.appContext,
-            voiceEvents = listOf(demo2Voice),
-            traceEvents = listOf(com.chockXlate.teachablevoice.contract.trace.TraceEvent.Voice("v_demo2", System.currentTimeMillis(), demo2Voice))
-        )
-        val norm2 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(trace2)
-        val actions2 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm2.normalizedTrace)
-        val intent2 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm2.normalizedTrace, actions2)
-        val slot2 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm2.normalizedTrace, actions2, intent2)
-        val demoDataset2 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
-            demonstrationId = "demo_02",
-            traceId = norm2.normalizedTrace.traceId,
-            intentResult = intent2,
-            slotResult = slot2
-        )
-
-        val datasets = listOf(demoDataset1, demoDataset2)
-
-        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(datasets)
+        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(listOf(demoDataset1))
         val inferenceResult = com.chockXlate.teachablevoice.learning.inference.ConstantVariableInference.infer(alignmentResult)
 
         statusTextView.text = "STATUS: PHASE 6 ALIGNED & INFERRED (${alignmentResult.alignedDemonstrationIds.size} Demos, ${inferenceResult.slotInferences.size} Inferences)"
@@ -530,39 +473,13 @@ class TeachingDemoActivity : Activity() {
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
-            demonstrationId = "demo_01",
+            demonstrationId = norm1.normalizedTrace.traceId,
             traceId = norm1.normalizedTrace.traceId,
             intentResult = intent1,
             slotResult = slot1
         )
 
-        // Demo 2
-        val demo2Voice = com.chockXlate.teachablevoice.contract.event.VoiceEvent(
-            eventId = "v_demo2",
-            timestamp = System.currentTimeMillis(),
-            transcript = "Order 1 Farmhouse pizza from Pizza Palace to Home"
-        )
-        val trace2 = com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace(
-            traceId = "tr_demo2",
-            timestamp = System.currentTimeMillis(),
-            appContext = norm1.normalizedTrace.appContext,
-            voiceEvents = listOf(demo2Voice),
-            traceEvents = listOf(com.chockXlate.teachablevoice.contract.trace.TraceEvent.Voice("v_demo2", System.currentTimeMillis(), demo2Voice))
-        )
-        val norm2 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(trace2)
-        val actions2 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm2.normalizedTrace)
-        val intent2 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm2.normalizedTrace, actions2)
-        val slot2 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm2.normalizedTrace, actions2, intent2)
-        val demoDataset2 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
-            demonstrationId = "demo_02",
-            traceId = norm2.normalizedTrace.traceId,
-            intentResult = intent2,
-            slotResult = slot2
-        )
-
-        val datasets = listOf(demoDataset1, demoDataset2)
-
-        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(datasets)
+        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(listOf(demoDataset1))
         val inferenceResult = com.chockXlate.teachablevoice.learning.inference.ConstantVariableInference.infer(alignmentResult)
 
         val synthesisResult = com.chockXlate.teachablevoice.learning.synthesis.WorkflowSynthesizer.synthesize(
@@ -581,9 +498,18 @@ class TeachingDemoActivity : Activity() {
         traceInspectorTextView.text = formatted
     }
 
-    private val skillRepo = com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository()
+    private val skillRepo get() = SkillRepositoryProvider.getRepository()
+    private val runtimeEngine get() = RuntimeSession.engine
 
-    private fun validateAndStoreSkillPhase8() {
+    private var lastBuildResult: ExecutionRequestBuildResult? = null
+    private var lastExecutionRequest: ExecutionRequest? = null
+    private val isExecuting get() = RuntimeSession.executing
+
+    private fun validateAndStoreSkillPhase8(confirmedVariables: Set<String>? = null) {
+        if (TeachingSessionManager.isTeachingActive()) {
+            statusTextView.text = "Stop teaching before reviewing and saving the workflow."
+            return
+        }
         val targetTrace1 = TeachingSessionManager.peekSessionTrace() 
             ?: lastCapturedTrace 
             ?: run {
@@ -596,35 +522,33 @@ class TeachingDemoActivity : Activity() {
         val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace)
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
-        val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset("demo_01", norm1.normalizedTrace.traceId, intent1, slot1)
+        val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(norm1.normalizedTrace.traceId, norm1.normalizedTrace.traceId, intent1, slot1)
 
-        val demo2Voice = com.chockXlate.teachablevoice.contract.event.VoiceEvent(
-            eventId = "v_demo2",
-            timestamp = System.currentTimeMillis(),
-            transcript = "Order 1 Farmhouse pizza from Pizza Palace to Home"
-        )
-        val trace2 = com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace(
-            traceId = "tr_demo2",
-            timestamp = System.currentTimeMillis(),
-            appContext = norm1.normalizedTrace.appContext,
-            voiceEvents = listOf(demo2Voice),
-            traceEvents = listOf(com.chockXlate.teachablevoice.contract.trace.TraceEvent.Voice("v_demo2", System.currentTimeMillis(), demo2Voice))
-        )
-        val norm2 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(trace2)
-        val actions2 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm2.normalizedTrace)
-        val intent2 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm2.normalizedTrace, actions2)
-        val slot2 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm2.normalizedTrace, actions2, intent2)
-        val demoDataset2 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset("demo_02", norm2.normalizedTrace.traceId, intent2, slot2)
-
-        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(listOf(demoDataset1, demoDataset2))
+        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(listOf(demoDataset1))
         val inferenceResult = com.chockXlate.teachablevoice.learning.inference.ConstantVariableInference.infer(alignmentResult)
+
+        if (confirmedVariables == null) {
+            val names = inferenceResult.slotInferences.map { it.slotName }.toTypedArray()
+            val selected = BooleanArray(names.size)
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Which values should future commands supply?")
+                .setMultiChoiceItems(names, selected) { _, index, checked -> selected[index] = checked }
+                .setPositiveButton("Save") { _, _ ->
+                    validateAndStoreSkillPhase8(names.filterIndexed { index, _ -> selected[index] }.toSet())
+                }
+                .setNegativeButton("Cancel", null).show()
+            return
+        }
+        val confirmedInference = com.chockXlate.teachablevoice.learning.inference.SingleDemonstrationConfirmation.confirm(
+            inferenceResult, confirmedVariables
+        )
 
         val synthesisResult = com.chockXlate.teachablevoice.learning.synthesis.WorkflowSynthesizer.synthesize(
             intentResult = intent1,
             semanticActions = actions1,
             slotResult = slot1,
             alignmentResult = alignmentResult,
-            inferenceResult = inferenceResult,
+            inferenceResult = confirmedInference,
             trace = norm1.normalizedTrace
         )
 
@@ -670,8 +594,21 @@ class TeachingDemoActivity : Activity() {
         traceInspectorTextView.text = formatted
     }
 
+    private fun safeCommand(): String? {
+        val command = voiceInput.text.toString()
+        if (com.chockXlate.teachablevoice.safety.RuntimeSafetyPolicy().credentialText(command)) {
+            voiceInput.text.clear()
+            lastExecutionRequest = null
+            lastBuildResult = null
+            statusTextView.text = "Credential-related commands require manual control."
+            traceInspectorTextView.text = "Sensitive command discarded; no request created."
+            return null
+        }
+        return command
+    }
+
     private fun understandNewCommandPhase10() {
-        val rawCmd = voiceInput.text.toString().ifBlank { "Order 2 Farmhouse pizzas from Pizza Palace" }
+        val rawCmd = safeCommand() ?: return
         val result = com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter.understandCommand(rawCmd)
 
         statusTextView.text = "STATUS: PHASE 10 COMMAND UNDERSTOOD ('${result.intent.canonicalName}', ${result.slots.size} Slots)"
@@ -682,64 +619,16 @@ class TeachingDemoActivity : Activity() {
     }
 
     private fun matchCommandToSkillPhase11() {
-        // Ensure skill store has at least one valid workflow for demo if empty
-        if (skillRepo.getWorkflowCount() == 0) {
-            val sampleWorkflow = com.chockXlate.teachablevoice.contract.workflow.Workflow(
-                skillId = "skill_order_food_s5_p4",
-                name = "Order Food Skill",
-                intent = "order_food",
-                appContext = "com.example.foodapp",
-                slots = listOf(
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "restaurant",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.TEXT,
-                        required = false,
-                        exampleValue = "Pizza Palace",
-                        provenance = "constant"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "item",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.TEXT,
-                        required = true,
-                        exampleValue = "\${item}",
-                        provenance = "variable"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "quantity",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.INTEGER,
-                        required = true,
-                        exampleValue = "\${quantity}",
-                        provenance = "variable"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "address",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.ADDRESS,
-                        required = false,
-                        exampleValue = "Home",
-                        provenance = "constant"
-                    )
-                ),
-                steps = listOf(
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowStep(
-                        stepId = "step_1",
-                        semanticAction = "INPUT_TEXT",
-                        semanticSelector = com.chockXlate.teachablevoice.contract.workflow.SemanticSelector(
-                            role = "EditText",
-                            textSlot = "item",
-                            resourceId = "com.example.foodapp:id/search"
-                        )
-                    )
-                )
-            )
-            skillRepo.saveWorkflow(sampleWorkflow)
-        }
-
-        val rawCmd = voiceInput.text.toString().ifBlank { "Order 2 Farmhouse pizzas from Pizza Palace" }
+        val rawCmd = safeCommand() ?: return
         val understanding = com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter.understandCommand(rawCmd)
         val matcher = com.chockXlate.teachablevoice.command.matching.SkillMatcher(skillRepo)
         val matchResult = matcher.match(understanding)
 
-        statusTextView.text = "STATUS: PHASE 11 SKILL MATCHED (${matchResult.status}, Skill: ${matchResult.selectedSkillId ?: "None"})"
+        statusTextView.text = when (matchResult.status) {
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> "STATUS: PHASE 11 SKILL MATCHED ('${matchResult.selectedSkillId}')"
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.AMBIGUOUS -> "STATUS: PHASE 11 SKILL MATCH AMBIGUOUS (${matchResult.candidates.size} candidates). Clarification needed."
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.UNKNOWN -> "STATUS: PHASE 11 SKILL MATCH UNKNOWN. Teaching required."
+        }
         statusTextView.setTextColor(
             when (matchResult.status) {
                 com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> Color.parseColor("#00E676")
@@ -753,59 +642,7 @@ class TeachingDemoActivity : Activity() {
     }
 
     private fun createExecutionRequestPhase12() {
-        // Ensure skill store has at least one valid workflow for demo if empty
-        if (skillRepo.getWorkflowCount() == 0) {
-            val sampleWorkflow = com.chockXlate.teachablevoice.contract.workflow.Workflow(
-                skillId = "skill_order_food_s5_p4",
-                name = "Order Food Skill",
-                intent = "order_food",
-                appContext = "com.example.foodapp",
-                slots = listOf(
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "restaurant",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.TEXT,
-                        required = false,
-                        exampleValue = "Pizza Palace",
-                        provenance = "constant"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "item",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.TEXT,
-                        required = true,
-                        exampleValue = "\${item}",
-                        provenance = "variable"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "quantity",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.INTEGER,
-                        required = true,
-                        exampleValue = "\${quantity}",
-                        provenance = "variable"
-                    ),
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowSlot(
-                        name = "address",
-                        type = com.chockXlate.teachablevoice.contract.workflow.SlotType.ADDRESS,
-                        required = false,
-                        exampleValue = "Home",
-                        provenance = "constant"
-                    )
-                ),
-                steps = listOf(
-                    com.chockXlate.teachablevoice.contract.workflow.WorkflowStep(
-                        stepId = "step_1",
-                        semanticAction = "INPUT_TEXT",
-                        semanticSelector = com.chockXlate.teachablevoice.contract.workflow.SemanticSelector(
-                            role = "EditText",
-                            textSlot = "item",
-                            resourceId = "com.example.foodapp:id/search"
-                        )
-                    )
-                )
-            )
-            skillRepo.saveWorkflow(sampleWorkflow)
-        }
-
-        val rawCmd = voiceInput.text.toString().ifBlank { "Order 2 Farmhouse pizzas from Pizza Palace" }
+        val rawCmd = safeCommand() ?: return
         val understanding = com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter.understandCommand(rawCmd)
         val matcher = com.chockXlate.teachablevoice.command.matching.SkillMatcher(skillRepo)
         val matchResult = matcher.match(understanding)
@@ -815,8 +652,17 @@ class TeachingDemoActivity : Activity() {
             matchResult = matchResult,
             repository = skillRepo
         )
+        lastBuildResult = buildResult
+        lastExecutionRequest = buildResult.executionRequest
 
-        statusTextView.text = "STATUS: PHASE 12 REQUEST (${buildResult.status}, ReqID: ${buildResult.executionRequest?.executionId ?: "None"})"
+        statusTextView.text = when (buildResult.status) {
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2 -> "STATUS: PHASE 12 REQUEST READY (ReqID: ${buildResult.executionRequest?.executionId})"
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_MISSING_REQUIRED_SLOTS -> "STATUS: PHASE 12 REJECTED - Missing slots: ${buildResult.missingSlots.joinToString()}. Clarification needed."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_UNKNOWN_MATCH -> "STATUS: PHASE 12 REJECTED - Unknown skill. Teaching required."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_AMBIGUOUS_MATCH -> "STATUS: PHASE 12 REJECTED - Ambiguous match. Clarification needed."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_SAFETY_BLOCKED -> "STATUS: PHASE 12 REJECTED - Safety boundary blocked."
+            else -> "STATUS: PHASE 12 REJECTED (${buildResult.rejectionReason ?: buildResult.status.name})"
+        }
         statusTextView.setTextColor(
             if (buildResult.status == com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2)
                 Color.parseColor("#00E676")
@@ -828,6 +674,132 @@ class TeachingDemoActivity : Activity() {
         traceInspectorTextView.text = formatted
     }
 
+    private fun executeWithPerson2Runtime() {
+        if (!isExecuting.compareAndSet(false, true)) {
+            statusTextView.text = "STATUS: RUNTIME ALREADY EXECUTING"
+            statusTextView.setTextColor(Color.parseColor("#FFD600"))
+            return
+        }
+
+        // Accessibility service readiness check
+        val service = TeachableVoiceAccessibilityService.instance
+        val serviceConnected = service != null && service.isRuntimeReady
+        val teachingActive = service?.isTeachingModeActive == true || TeachingSessionManager.isTeachingActive()
+
+        if (!serviceConnected || teachingActive) {
+            val warningReason = when {
+                !serviceConnected -> "Accessibility service is not connected. Enable TeachableVoice in Settings."
+                else -> "Teaching mode is active. Stop teaching before executing runtime."
+            }
+            statusTextView.text = "STATUS: ACCESSIBILITY NOT READY\n$warningReason"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            traceInspectorTextView.text = "WARNING: $warningReason\n\nClick 'ACCESSIBILITY SETTINGS' to enable the service."
+            isExecuting.set(false)
+            return
+        }
+
+        // Always bind the currently displayed command, never a cached request.
+        createExecutionRequestPhase12()
+        val request = lastExecutionRequest
+
+        if (request == null || lastBuildResult?.status != com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2) {
+            val reason = lastBuildResult?.rejectionReason ?: "No valid ExecutionRequest ready for Person 2."
+            statusTextView.text = "STATUS: REQUEST NOT READY\n$reason"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            isExecuting.set(false)
+            return
+        }
+
+        statusTextView.text = "STATUS: RUNTIME EXECUTING (${request.executionId})..."
+        statusTextView.setTextColor(Color.parseColor("#00E5FF"))
+        traceInspectorTextView.text = "=== LAUNCHING PERSON 2 EXECUTION ENGINE ===\nExecution ID: ${request.executionId}\nSkill ID: ${request.skillId}\n\nSwitch to the taught app now. Execution begins in 5 seconds."
+
+        val targetRequest = request
+        val launchToken = java.util.UUID.randomUUID().toString()
+        RuntimeSession.pendingRequest.set(launchToken)
+        android.os.Handler(mainLooper).postDelayed({
+            if (!RuntimeSession.pendingRequest.compareAndSet(launchToken, null)) return@postDelayed
+        Thread {
+            val suspendBlock: suspend () -> RuntimeReport = {
+                runtimeEngine.execute(targetRequest)
+            }
+            suspendBlock.startCoroutine(object : Continuation<RuntimeReport> {
+                override val context = EmptyCoroutineContext
+                override fun resumeWith(result: Result<RuntimeReport>) {
+                    runOnUiThread {
+                        isExecuting.set(false)
+                        result.onSuccess { report ->
+                            handleRuntimeReport(report)
+                        }.onFailure { error ->
+                            statusTextView.text = "STATUS: RUNTIME UNCAUGHT ERROR (${error.javaClass.simpleName})"
+                            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+                            traceInspectorTextView.text = "Runtime failed. No completion can be established."
+                        }
+                    }
+                }
+            })
+        }.start()
+        }, 5000L)
+    }
+
+    private fun handleRuntimeReport(report: RuntimeReport) {
+        val result = report.result
+        when (result.finalState) {
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.COMPLETED -> {
+                statusTextView.text = "STATUS: RUNTIME COMPLETED (${result.stepsCompleted}/${result.totalSteps} steps)"
+                statusTextView.setTextColor(Color.parseColor("#00E676"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.PAUSED_FOR_HANDOFF -> {
+                statusTextView.text = "STATUS: RUNTIME PAUSED FOR HANDOFF\n${result.errorMessage ?: "User handoff required"}"
+                statusTextView.setTextColor(Color.parseColor("#FFD600"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.ABORTED -> {
+                statusTextView.text = "STATUS: RUNTIME ABORTED\n${result.errorMessage ?: "Execution aborted"}"
+                statusTextView.setTextColor(Color.parseColor("#FF9100"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.FAILED -> {
+                statusTextView.text = "STATUS: RUNTIME FAILED\n${result.errorMessage ?: "Execution failed"}"
+                statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            }
+            else -> {
+                statusTextView.text = "STATUS: RUNTIME STATE: ${result.finalState}"
+                statusTextView.setTextColor(Color.parseColor("#00E5FF"))
+            }
+        }
+        traceInspectorTextView.text = TraceViewer.formatRuntimeReport(report)
+    }
+
+    private fun acknowledgeHandoffAndReset() {
+        if (isExecuting.get()) return
+        val acknowledged = runtimeEngine.acknowledgeHandoffForNewExecution()
+        if (acknowledged) {
+            statusTextView.text = "STATUS: HANDOFF ACKNOWLEDGED & RESET"
+            statusTextView.setTextColor(Color.parseColor("#00E676"))
+            traceInspectorTextView.text = "Handoff acknowledged. Safety gate reset for new execution."
+        } else {
+            statusTextView.text = "STATUS: CANNOT RESET (Execution currently active)"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+        }
+    }
+
+    private fun cancelRuntimeExecution() {
+        if (RuntimeSession.pendingRequest.getAndSet(null) != null) isExecuting.set(false)
+        runtimeEngine.cancel()
+        statusTextView.text = "STATUS: RUNTIME CANCELLATION REQUESTED"
+        statusTextView.setTextColor(Color.parseColor("#FF9100"))
+    }
+
+    private fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            traceInspectorTextView.text = "Unable to open Accessibility Settings: ${e.message}"
+        }
+    }
+
     private fun updateLiveTraceDisplay() {
         val trace = TeachingSessionManager.peekSessionTrace() ?: return
         statusTextView.text = "STATUS: TEACHING ACTIVE (Events: ${trace.traceEvents.size})"
@@ -836,5 +808,38 @@ class TeachingDemoActivity : Activity() {
         val liveSummary = TraceViewer.formatTrace(trace)
         traceInspectorTextView.text = liveSummary
     }
+    private var speechInput: NativeSpeechInput? = null
+
+    private fun toggleSpeech() {
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 42)
+            return
+        }
+        val speech = speechInput ?: NativeSpeechInput(this,
+            onStatus = { statusTextView.text = it },
+            onTranscript = { text ->
+                if (com.chockXlate.teachablevoice.safety.RuntimeSafetyPolicy().credentialText(text)) {
+                    statusTextView.text = "Credential-related speech was discarded. Continue manually."
+                } else {
+                    voiceInput.setText(text)
+                    if (TeachingSessionManager.isTeachingActive()) recordVoiceUtterance()
+                }
+            }).also { speechInput = it }
+        speech.toggle()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 42) {
+            if (grantResults.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED) toggleSpeech()
+            else statusTextView.text = "Microphone permission denied. Typed input remains available."
+        }
+    }
+
+    override fun onDestroy() {
+        speechInput?.close()
+        super.onDestroy()
+    }
+
 }
 

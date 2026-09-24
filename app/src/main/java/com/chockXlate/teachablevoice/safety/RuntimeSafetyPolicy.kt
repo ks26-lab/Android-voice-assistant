@@ -11,7 +11,7 @@ class RuntimeSafetyPolicy {
         "(?iu)(\\b(password|passcode|pin|otp|cvv2?|cvc|username|user[ _-]*name|credential|one[ _-]*time[ _-]*(password|code)|verification[ _-]*code|security[ _-]*code|card[ _-]*(number|code)|credit[ _-]*card|debit[ _-]*card|auth[ _-]*token|login|log[ _-]*in|sign[ _-]*in|authenticate|authentication)\\b|पासवर्ड|ओटीपी|पिन|लॉगिन)"
     )
     private val payment = Regex(
-        "(?iu)(\\b(pay|payment|checkout|place[ _-]*order|confirm[ _-]*(purchase|order|payment)|buy[ _-]*now|complete[ _-]*purchase)\\b|भुगतान|खरीदें)"
+        "(?iu)(\\b(pay|payment|checkout|place[ _-]*order|confirm[ _-]*(purchase|order|payment)|buy[ _-]*now|complete[ _-]*purchase|banking|transfer[ _-]*funds|confirm[ _-]*(transfer|transaction)|security[ _-]*confirmation)\\b|भुगतान|खरीदें)"
     )
 
     private fun words(value: String): String = value.replace(Regex("([a-z])([A-Z])"), "$1 $2").replace('_', ' ')
@@ -22,6 +22,8 @@ class RuntimeSafetyPolicy {
         workflow.safetyBoundary.schemaVersion != "1.0" -> "Unsupported safety boundary schema."
         workflow.safetyBoundary.requiresExplicitUserConfirmation -> "This workflow requires explicit user handoff before automation."
         workflow.safetyBoundary.maxAllowedValue != null -> "A monetary limit is declared, but the contract provides no reliable amount/currency evidence."
+        workflow.steps.any { it.semanticAction.equals("EXECUTE_INTENT", ignoreCase = true) } ->
+            "Voice-only demonstration has no recorded UI actions. Clarification and interactive teaching required."
         else -> null
     }
 

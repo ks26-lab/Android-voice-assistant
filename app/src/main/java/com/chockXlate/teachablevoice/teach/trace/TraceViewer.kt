@@ -527,7 +527,79 @@ object TraceViewer {
      * Formats Phase 12 ExecutionRequestBuildResult into a structured human-readable summary.
      */
     fun formatExecutionRequestResult(result: com.chockXlate.teachablevoice.command.request.ExecutionRequestBuildResult): String {
-        return com.chockXlate.teachablevoice.command.request.Person1MockRuntime.formatMockHandoff(result)
+        return buildString {
+            appendLine("EXECUTION REQUEST PREVIEW — NO ACTION PERFORMED")
+            appendLine("Status: ${result.status}")
+            appendLine("Skill: ${result.skillId ?: "None"}")
+            appendLine("Execution ID: ${result.executionRequest?.executionId ?: "Not created"}")
+            appendLine("Missing slots: ${result.missingSlots.joinToString().ifBlank { "None" }}")
+            result.rejectionReason?.let { appendLine("Reason: $it") }
+            appendLine("Use EXECUTE RUNTIME to submit a freshly bound command.")
+        }
+    }
+
+    /**
+     * Formats Person 2 RuntimeReport into a structured human-readable summary.
+     */
+    fun formatRuntimeReport(report: com.chockXlate.teachablevoice.runtime.trace.RuntimeReport): String {
+        val sb = StringBuilder()
+        val result = report.result
+        val trace = report.trace
+
+        sb.appendLine("==================================================")
+        sb.appendLine("       PERSON 2 RUNTIME EXECUTION REPORT")
+        sb.appendLine("==================================================")
+        sb.appendLine("EXECUTION ID   : ${result.executionId}")
+        sb.appendLine("SKILL ID       : ${trace.skillId}")
+        sb.appendLine("FINAL STATE    : ${result.finalState}")
+        sb.appendLine("SUCCESS        : ${if (result.success) "YES ✓" else "NO ✗"}")
+        sb.appendLine("STEPS COMPLETED: ${result.stepsCompleted} / ${result.totalSteps}")
+        sb.appendLine("DURATION       : ${result.durationMs} ms")
+        if (report.stoppedStepId != null) {
+            sb.appendLine("STOPPED STEP   : ${report.stoppedStepId}")
+        }
+        if (result.errorMessage != null) {
+            sb.appendLine("REASON / ERROR : ${result.errorMessage}")
+        }
+        sb.appendLine("--------------------------------------------------")
+
+        if (result.finalState == com.chockXlate.teachablevoice.contract.runtime.ExecutionState.PAUSED_FOR_HANDOFF) {
+            sb.appendLine(">>> AUTOMATION PAUSED — USER ACTION REQUIRED <<<")
+            sb.appendLine("Handoff Reason: ${result.errorMessage ?: "User confirmation required."}")
+            sb.appendLine("Safety boundary active. No further automated Accessibility actions are allowed until explicit reset.")
+            sb.appendLine("--------------------------------------------------")
+        }
+
+        sb.appendLine("RUNTIME DECISION TRACE (${report.diagnostics.size} decisions):")
+        if (report.diagnostics.isEmpty()) {
+            sb.appendLine("  (No decision diagnostics recorded)")
+        } else {
+            report.diagnostics.forEachIndexed { idx, diag ->
+                val stepStr = diag.stepId?.let { "[$it] " } ?: ""
+                sb.appendLine("  #${idx + 1}. $stepStr${diag.state} -> ${diag.decision.type}")
+                sb.appendLine("      Reason: ${diag.decision.reason} (confidence: ${diag.decision.confidence})")
+            }
+        }
+
+        if (trace.events.isNotEmpty()) {
+            sb.appendLine("--------------------------------------------------")
+            sb.appendLine("EXECUTION EVENTS (${trace.events.size}):")
+            trace.events.forEachIndexed { idx, event ->
+                val timeStr = timeFormat.format(Date(event.timestamp))
+                when (event) {
+                    is TraceEvent.Action -> {
+                        sb.appendLine("  [$timeStr] Action: ${event.actionEvent.actionType} (ID: ${event.actionEvent.actionId})")
+                    }
+                    is TraceEvent.State -> {
+                        sb.appendLine("  [$timeStr] State Change: Cause=${event.stateEvent.causeActionId}")
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        sb.appendLine("==================================================")
+        return sb.toString()
     }
 }
 

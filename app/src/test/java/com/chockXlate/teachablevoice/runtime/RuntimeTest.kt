@@ -435,4 +435,64 @@ class RuntimeTest {
         val report = run { engine.execute(request()) }
         assertEquals(ExecutionState.ABORTED, report.result.finalState); assertEquals(0, driver.actions)
     }
+    @Test fun threeStepWorkflowBindsTextQuantityAndAddressInOrder() {
+        val names = listOf("item", "quantity", "address")
+        val values = listOf("Changed text", "7", "New destination")
+        val types = listOf(SlotType.TEXT, SlotType.INTEGER, SlotType.ADDRESS)
+        val selectors = names.map { SemanticSelector(role = "EditText", resourceId = "id/$it", textSlot = it) }
+        val steps = selectors.mapIndexed { index, selector ->
+            step(action = "INPUT_TEXT", selector = selector).copy(stepId = "step_$index")
+        }
+        val wf = workflow().copy(steps = steps, slots = names.mapIndexed { index, name ->
+            WorkflowSlot(name = name, type = types[index], required = true, exampleValue = "Old value")
+        })
+        val entered = mutableMapOf<String, String>()
+        fun screen() = ui(*names.mapIndexed { index, name -> UiElement(elementId = "field_$index",
+            role = "EditText", resourceId = "id/$name", text = entered[name].orEmpty(), isEditable = true)
+        }.toTypedArray())
+        val driver = FakeDriver(screen())
+        val observedInputs = mutableListOf<String?>()
+        driver.effect = { bound ->
+            observedInputs.add(bound.inputText)
+            entered[names[observedInputs.size - 1]] = bound.inputText!!
+            driver.screen = screen()
+        }
+        val report = run { ExecutionEngine(Store(wf), driver).execute(request(names.zip(values).toMap())) }
+        assertEquals(values, observedInputs)
+        assertEquals(3, driver.actions)
+        assertEquals(3, report.result.stepsCompleted)
+        assertTrue(report.result.success)
+    }
+
+    @Test fun sensitiveSecondScreenBlocksNextStepAndEverySubsequentRun() {
+        val wf = workflow().copy(steps = listOf(step().copy(stepId = "first"), step().copy(stepId = "second")))
+        val driver = FakeDriver(ui(button()))
+        driver.effect = { driver.screen = ui(button(text = "Password")) }
+        val engine = ExecutionEngine(Store(wf), driver)
+        val first = run { engine.execute(request()) }
+        val second = run { engine.execute(request()) }
+        assertEquals(1, driver.actions)
+        assertFalse(first.result.success)
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, second.result.finalState)
+        assertEquals(0, first.result.stepsCompleted)
+    }
+
+    @Test fun constantInputValueIsNotMistakenForCurrentFieldIdentity() {
+        val selector = SemanticSelector(role = "EditText", resourceId = "field", text = "Fixed text")
+        val source = step(action = "INPUT_TEXT", selector = selector,
+            pre = Preconditions(requiredElementPresent = selector)).copy(parameters = mapOf("input_literal" to "Fixed text"))
+        val bound = SlotBinder.bind(workflow(source), emptyMap()).steps.single()
+        assertNull(bound.selector.text)
+        assertNull(bound.preconditions.requiredElementPresent!!.text)
+        assertEquals("Fixed text", bound.inputText)
+        assertEquals(MatchStatus.MATCHED, matcher.match(bound.selector, ui(input("")), bound.action).status)
+    }
+
+    @Test fun financialTransferConfirmationRequiresHandoffWithoutAction() {
+        val driver = FakeDriver(ui(button(text = "Confirm transfer")))
+        val report = run { ExecutionEngine(Store(workflow()), driver).execute(request()) }
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.result.finalState)
+        assertEquals(0, driver.actions)
+    }
+
 }

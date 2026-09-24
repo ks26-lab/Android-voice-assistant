@@ -83,12 +83,19 @@ object SlotBinder {
                 "SCROLL requires an explicit forward or backward direction."
             }
             val inputTarget = action == RuntimeAction.INPUT_TEXT
+            fun inputIdentity(sel: SemanticSelector): SemanticSelector {
+                val bound = selector(sel, inputTarget)
+                // A learned input value is not the identity of an empty field on the next run.
+                return if (inputTarget && bound.text == textValues.firstOrNull() &&
+                    (!bound.resourceId.isNullOrBlank() || !bound.contentDescription.isNullOrBlank())) bound.copy(text = null)
+                else bound
+            }
             BoundStep(
                 source = step,
                 action = action,
-                selector = selector(step.semanticSelector, inputTarget),
+                selector = inputIdentity(step.semanticSelector),
                 preconditions = step.preconditions.copy(requiredElementPresent = step.preconditions.requiredElementPresent?.let {
-                    selector(it, inputTarget && it == step.semanticSelector)
+                    if (it == step.semanticSelector) inputIdentity(it) else selector(it)
                 }),
                 transition = step.expectedTransition.copy(
                     expectedElementAppeared = step.expectedTransition.expectedElementAppeared?.let { selector(it) },

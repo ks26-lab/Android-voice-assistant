@@ -16,7 +16,8 @@ object CommandInterpreter {
         "send_message" to listOf("recipient", "message"),
         "book_appointment" to listOf("service", "date", "time"),
         "create_reminder" to listOf("task", "time"),
-        "navigate" to listOf("destination")
+        "navigate" to listOf("destination"),
+        "search_information" to listOf("item")
     )
 
     fun normalizeCommand(rawCommand: String): String {
@@ -106,6 +107,7 @@ object CommandInterpreter {
         val navigatePhrases = listOf("navigate to", "take me to", "directions to")
 
         return when {
+            Regex("""^(?:search(?: for)?|find|look up|lookup)\b""").containsMatchIn(normalized) -> Pair("search_information", 1.0)
             foodPhrases.any { normalized.contains(it) } -> Pair("order_food", 1.0)
             messagePhrases.any { normalized.contains(it) } -> Pair("send_message", 1.0)
             appointmentPhrases.any { normalized.contains(it) } -> Pair("book_appointment", 1.0)
@@ -123,6 +125,13 @@ object CommandInterpreter {
     ): List<CommandSlot> {
         val slots = mutableListOf<CommandSlot>()
 
+        if (canonicalIntent == "search_information") {
+            val query = Regex("""^(?:search(?: for)?|find|look up|lookup)\s+(.+)$""", RegexOption.IGNORE_CASE)
+                .find(rawCommand.trim())?.groupValues?.get(1)?.trim()
+            if (!query.isNullOrBlank()) slots.add(CommandSlot(name = "item", type = SlotType.TEXT,
+                rawValue = query, typedValue = query, confidence = 1.0, confidenceLevel = "HIGH",
+                provenance = "Explicit search query"))
+        }
         if (canonicalIntent == "order_food") {
             // Extract Quantity (Integer)
             val numMatch = Regex("""\b(\d+)\b""").find(rawCommand)

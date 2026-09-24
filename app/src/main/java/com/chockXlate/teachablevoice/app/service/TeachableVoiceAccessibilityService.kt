@@ -29,6 +29,10 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
     @Volatile var isRuntimeReady: Boolean = false
         private set
     private var previousUiState: UiState? = null
+    private var captureSessionId: String? = null
+    private var capturedPackage: String? = null
+    var teachingWarning: String? = null
+        private set
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -43,7 +47,20 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         val isTeaching = isTeachingModeActive || TeachingSessionManager.isTeachingActive()
         if (!isTeaching) return
 
-        val packageName = event.packageName?.toString() ?: "unknown"
+        val sessionId = TeachingSessionManager.getActiveSession()?.sessionId ?: return
+        if (captureSessionId != sessionId) {
+            captureSessionId = sessionId
+            previousUiState = null
+            capturedPackage = null
+            teachingWarning = null
+        }
+        if (teachingWarning != null) return
+        val packageName = event.packageName?.toString() ?: return
+        if (packageName == this.packageName) return
+        val actionable = event.eventType in setOf(AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)
+        if (capturedPackage == null && !actionable) return
+        if (capturedPackage != null && packageName != capturedPackage) return
         val className = event.className?.toString()
         val eventTypeString = AccessibilityEvent.eventTypeToString(event.eventType)
 
@@ -59,11 +76,10 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         val packageName = rootNode.packageName?.toString() ?: "unknown"
         val windowId = rootNode.windowId
 
-        val state = UiNodeNormalizer.normalizeState(rootNode, packageName, windowId)
-        rootNode.recycle()
-
-        Log.d(TAG, "Captured UI State for $packageName: ${state.allElements.size} elements extracted.")
-        return state
+        return try {
+            if (TeachingPrivacyGuard.blocks(rootNode)) null
+            else UiNodeNormalizer.normalizeState(rootNode, packageName, windowId)
+        } finally { rootNode.recycle() }
     }
 
     /**
@@ -76,9 +92,7 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
             return
         }
         Log.i(TAG, "=== UI Hierarchy Dump [App: ${uiState.appContext}, Elements: ${uiState.allElements.size}] ===")
-        uiState.allElements.forEach { element ->
-            Log.i(TAG, "  Element [Role: ${element.role}, Text: '${element.text}', ResId: ${element.resourceId}, Clickable: ${element.isClickable}]")
-        }
+
     }
 
     private fun handleTeachingEvent(
@@ -88,9 +102,23 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         eventTypeString: String
     ) {
         val timestamp = System.currentTimeMillis()
-        val sourceNode = event.source
-        val targetElement = sourceNode?.let { UiNodeNormalizer.normalizeNode(it) }
-        sourceNode?.recycle()
+        val root = rootInActiveWindow ?: return
+        try {
+            if (root.packageName?.toString() != packageName) return
+            if (event.isPassword || TeachingPrivacyGuard.blocks(root)) {
+                teachingWarning = "Teaching capture paused at a credential boundary. Stop teaching; continue manually."
+                return
+            }
+        } finally { root.recycle() }
+        val sourceNode = event.source ?: return
+        val targetElement = try {
+            if (TeachingPrivacyGuard.blocks(sourceNode)) {
+                teachingWarning = "Teaching capture paused at a credential boundary."
+                return
+            }
+            UiNodeNormalizer.normalizeNode(sourceNode)
+        } finally { sourceNode.recycle() }
+        capturedPackage = packageName
 
         val uiEvent = UiEvent(
             schemaVersion = "1.0",
@@ -111,29 +139,27 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
 
         // Action Detection based on Accessibility Event Type
         val actionType = when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> "CLICK"
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> if (targetElement.isEditable) null else "CLICK"
             AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "LONG_PRESS"
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "INPUT_TEXT"
-            AccessibilityEvent.TYPE_VIEW_SELECTED -> "SELECT"
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> "FOCUS"
             else -> null
         }
 
         if (actionType != null) {
             val inputData = if (actionType == "INPUT_TEXT") {
-                event.text?.joinToString("") ?: targetElement?.text
+                targetElement.text
             } else {
                 null
             }
 
             val selector = SemanticSelector(
                 schemaVersion = "1.0",
-                role = targetElement?.role,
-                text = targetElement?.text,
-                contentDescription = targetElement?.contentDescription,
-                resourceId = targetElement?.resourceId,
-                parentRole = targetElement?.parentRole,
-                ancestorRole = targetElement?.ancestorRole
+                role = targetElement.role,
+                text = targetElement.text,
+                contentDescription = targetElement.contentDescription,
+                resourceId = targetElement.resourceId,
+                parentRole = targetElement.parentRole,
+                ancestorRole = targetElement.ancestorRole
             )
 
             val actionEvent = ActionEvent(
