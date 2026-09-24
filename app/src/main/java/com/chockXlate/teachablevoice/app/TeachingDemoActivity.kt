@@ -304,7 +304,7 @@ class TeachingDemoActivity : Activity() {
 
         traceInspectorTextView = TextView(this).apply {
             text = "--- DEMONSTRATION TRACE INSPECTOR ---\n(Start teaching and perform actions to view live trace output)"
-            textColor = Color.parseColor("#A7FFEB")
+            setTextColor(Color.parseColor("#A7FFEB"))
             textSize = 12f
             typeface = Typeface.MONOSPACE
             setBackgroundColor(Color.parseColor("#000000"))

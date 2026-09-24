@@ -38,8 +38,8 @@ object WorkflowInspectorImpl : WorkflowInspector {
         val validation = WorkflowValidator.validate(workflow)
 
         // Store status
-        val isStored = repository?.contains(workflow.skillId) == true
-        val skillVersion = if (isStored && repository != null) repository.getSkillVersion(workflow.skillId) else 1
+        val isStored = repository?.getWorkflowById(workflow.skillId) != null
+        val skillVersion = if (isStored && repository is com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository) repository.getSkillVersion(workflow.skillId) else 1
         val storeStatus = when {
             isStored -> "STORED"
             validation.status == ValidationStatus.BLOCKED || validation.status == ValidationStatus.INVALID -> "REJECTED"

@@ -60,7 +60,7 @@ object SlotExtractor {
             val targetText = target?.text?.lowercase() ?: ""
             val targetRole = target?.role ?: ""
 
-            if (!inputVal.isNull me.isNotBlank()) {
+            if (!inputVal.isNullOrBlank()) {
                 val (slotName, slotType) = inferSlotNameAndType(targetResId, targetText, inputVal)
                 candidates.add(
                     CandidateSlotEvidence(

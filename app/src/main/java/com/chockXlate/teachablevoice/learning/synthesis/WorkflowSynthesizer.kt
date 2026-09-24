@@ -231,7 +231,7 @@ object WorkflowSynthesizer {
                 expectedTransition = expectedTransition,
                 recoveryPolicy = recoveryPolicy,
                 confidence = action.confidence,
-                provenance = "Phase 3 SemanticAction ${action.actionId} (Voice: ${action.associatedVoiceEventId ?: "none"})"
+                provenance = "Phase 3 SemanticAction ${action.actionId} (Voice: ${action.rawEventId ?: "none"})"
             )
             workflowSteps.add(step)
         }
