@@ -17,12 +17,13 @@ object VoiceCaptureController {
         confidence: Double = 1.0,
         rawAudioUri: String? = null
     ): VoiceEvent {
+        val sensitive = com.chockXlate.teachablevoice.safety.RuntimeSafetyPolicy().credentialText(transcript)
         val event = VoiceEvent(
             schemaVersion = "1.0",
             eventId = UUID.randomUUID().toString(),
             timestamp = System.currentTimeMillis(),
-            rawAudioUri = rawAudioUri,
-            transcript = transcript,
+            rawAudioUri = if (sensitive) null else rawAudioUri,
+            transcript = if (sensitive) "[Credential-related utterance discarded]" else transcript,
             confidence = confidence,
             isFinal = true
         )

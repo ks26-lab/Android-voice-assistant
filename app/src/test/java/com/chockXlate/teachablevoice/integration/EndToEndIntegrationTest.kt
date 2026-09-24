@@ -15,6 +15,7 @@ import com.chockXlate.teachablevoice.contract.ui.UiState
 import com.chockXlate.teachablevoice.contract.workflow.ExpectedTransition
 import com.chockXlate.teachablevoice.contract.workflow.Preconditions
 import com.chockXlate.teachablevoice.contract.workflow.RecoveryPolicy
+import com.chockXlate.teachablevoice.contract.workflow.RecoveryStrategy
 import com.chockXlate.teachablevoice.contract.workflow.SafetyBoundary
 import com.chockXlate.teachablevoice.contract.workflow.SemanticSelector
 import com.chockXlate.teachablevoice.contract.workflow.SlotType
@@ -148,7 +149,9 @@ class EndToEndIntegrationTest {
                 provenance = "variable"
             )
         ),
-        safetyBoundary: SafetyBoundary = SafetyBoundary()
+        safetyBoundary: SafetyBoundary = SafetyBoundary(),
+        recoveryPolicy: RecoveryPolicy = RecoveryPolicy(),
+        timeoutMs: Long = 500
     ): Workflow {
         val resolvedSlot = textSlot ?: if (semanticAction == "INPUT_TEXT") slots.firstOrNull()?.name else null
         return Workflow(
@@ -166,9 +169,9 @@ class EndToEndIntegrationTest {
                         resourceId = targetResId,
                         textSlot = resolvedSlot
                     ),
-                    expectedTransition = ExpectedTransition(timeoutMs = 500),
+                    expectedTransition = ExpectedTransition(timeoutMs = timeoutMs),
                     preconditions = Preconditions(),
-                    recoveryPolicy = RecoveryPolicy()
+                    recoveryPolicy = recoveryPolicy
                 )
             ),
             safetyBoundary = safetyBoundary
@@ -441,5 +444,287 @@ class EndToEndIntegrationTest {
         assertNotNull(resolution.workflow)
         assertEquals("skill_resolver_test", resolution.workflow?.skillId)
         assertNull(resolution.error)
+    }
+
+    @Test
+    fun testH_ambiguousCommand_rejectedAtRequestBuilder_noExecution() {
+        val repo = SkillRepositoryProvider.getRepository()
+        // Save two identical-intent workflows without distinguishing constants
+        val wf1 = createWorkflow(
+            skillId = "skill_order_food_fast",
+            intent = "order_food",
+            slots = emptyList()
+        )
+        val wf2 = createWorkflow(
+            skillId = "skill_order_food_standard",
+            intent = "order_food",
+            slots = emptyList()
+        )
+        repo.saveWorkflow(wf1)
+        repo.saveWorkflow(wf2)
+
+        val understanding = CommandInterpreter.understandCommand("Order food")
+        val matcher = SkillMatcher(repo)
+        val matchResult = matcher.match(understanding)
+
+        assertEquals(SkillMatchStatus.AMBIGUOUS, matchResult.status)
+        assertTrue(matchResult.candidates.size >= 2)
+
+        val buildResult = ExecutionRequestBuilder.build(understanding, matchResult, repo)
+
+        assertEquals(ExecutionRequestStatus.REJECTED_AMBIGUOUS_MATCH, buildResult.status)
+        assertNull(buildResult.executionRequest)
+    }
+
+    @Test
+    fun testI_transitionTimeout_failsGracefullyWithoutFabrication() {
+        val repo = SkillRepositoryProvider.getRepository()
+        val workflow = createWorkflow(
+            skillId = "skill_timeout_test",
+            semanticAction = "CLICK",
+            targetRole = "Button",
+            targetResId = "com.example.app:id/submit_btn",
+            slots = emptyList(),
+            timeoutMs = 100
+        )
+        repo.saveWorkflow(workflow)
+
+        // Screen NEVER updates upon click: simulates a hung or non-responsive app
+        val driver = TestUiDriver(createUiObservation(
+            packageName = "com.example.app",
+            UiElement(
+                elementId = "btn_1",
+                role = "Button",
+                resourceId = "com.example.app:id/submit_btn",
+                text = "Submit",
+                isClickable = true
+            )
+        ))
+        // Notice driver.effect is intentionally empty: screen does not change
+
+        val engine = ExecutionEngine(
+            repository = SkillRepositoryProvider.getRepository(),
+            driver = driver
+        )
+
+        val request = ExecutionRequest(
+            executionId = "req_timeout",
+            skillId = "skill_timeout_test",
+            boundSlots = emptyMap()
+        )
+
+        val report = runSuspend { engine.execute(request) }
+
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.result.finalState)
+        assertFalse(report.result.success)
+        assertTrue(report.result.errorMessage?.contains("timed out") == true ||
+                report.result.errorMessage?.contains("exhausted") == true)
+    }
+
+    @Test
+    fun testJ_boundedRecovery_doesNotLoopInfinitely() {
+        val repo = SkillRepositoryProvider.getRepository()
+        val workflow = createWorkflow(
+            skillId = "skill_recovery_test",
+            semanticAction = "CLICK",
+            targetRole = "Button",
+            targetResId = "com.example.app:id/missing_btn",
+            slots = emptyList(),
+            recoveryPolicy = RecoveryPolicy(
+                maxRetries = 2,
+                retryDelayMs = 10,
+                strategy = RecoveryStrategy.RETRY_STEP
+            )
+        )
+        repo.saveWorkflow(workflow)
+
+        // Screen does NOT contain the target button
+        val driver = TestUiDriver(createUiObservation(
+            packageName = "com.example.app",
+            UiElement(
+                elementId = "txt_1",
+                role = "TextView",
+                text = "Loading..."
+            )
+        ))
+
+        val engine = ExecutionEngine(
+            repository = SkillRepositoryProvider.getRepository(),
+            driver = driver
+        )
+
+        val request = ExecutionRequest(
+            executionId = "req_recovery",
+            skillId = "skill_recovery_test",
+            boundSlots = emptyMap()
+        )
+
+        val report = runSuspend { engine.execute(request) }
+
+        // Must terminate safely without infinite loop
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.result.finalState)
+        assertFalse(report.result.success)
+        assertEquals(0, driver.actions) // Never attempted action on non-existent control
+    }
+
+    @Test
+    fun testK_executionTraceAndResultCorrectness() {
+        val repo = SkillRepositoryProvider.getRepository()
+        val workflow = createWorkflow(
+            skillId = "skill_trace_test",
+            semanticAction = "CLICK",
+            targetRole = "Button",
+            targetResId = "com.example.app:id/submit_btn",
+            slots = emptyList()
+        )
+        repo.saveWorkflow(workflow)
+
+        val driver = TestUiDriver(createUiObservation(
+            packageName = "com.example.app",
+            UiElement(
+                elementId = "btn_1",
+                role = "Button",
+                resourceId = "com.example.app:id/submit_btn",
+                text = "Submit",
+                isClickable = true
+            )
+        ))
+        driver.effect = {
+            driver.screen = createUiObservation(
+                packageName = "com.example.app",
+                UiElement(
+                    elementId = "txt_done",
+                    role = "TextView",
+                    text = "Done"
+                )
+            )
+        }
+
+        val engine = ExecutionEngine(
+            repository = SkillRepositoryProvider.getRepository(),
+            driver = driver
+        )
+
+        val request = ExecutionRequest(
+            executionId = "req_trace_123",
+            skillId = "skill_trace_test",
+            boundSlots = emptyMap()
+        )
+
+        val report = runSuspend { engine.execute(request) }
+
+        assertEquals("req_trace_123", report.result.executionId)
+        assertEquals("skill_trace_test", report.trace.skillId)
+        assertTrue(report.result.success)
+        assertEquals(1, report.result.stepsCompleted)
+        assertEquals(1, report.result.totalSteps)
+        assertTrue(report.diagnostics.isNotEmpty())
+        assertTrue(report.trace.events.isNotEmpty())
+    }
+
+    @Test
+    fun testL_twoIndependentWorkflows_isolatedResolution() {
+        val repo = SkillRepositoryProvider.getRepository()
+
+        // Workflow 1: Food ordering
+        val foodWorkflow = createWorkflow(
+            skillId = "skill_food",
+            name = "Food Ordering",
+            intent = "order_food",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "pizza", provenance = "variable")
+            ),
+            textSlot = "item"
+        )
+
+        // Workflow 2: Messaging
+        val messageWorkflow = createWorkflow(
+            skillId = "skill_message",
+            name = "Send Message",
+            intent = "send_message",
+            targetResId = "com.example.app:id/msg_box",
+            slots = listOf(
+                WorkflowSlot(name = "recipient", type = SlotType.TEXT, required = true, exampleValue = "Alice", provenance = "variable")
+            ),
+            textSlot = "recipient"
+        )
+
+        repo.saveWorkflow(foodWorkflow)
+        repo.saveWorkflow(messageWorkflow)
+
+        // Test Command 1 -> resolves Food
+        val foodCmd = CommandInterpreter.understandCommand("Order pizza")
+        val foodMatch = SkillMatcher(repo).match(foodCmd)
+        assertEquals(SkillMatchStatus.MATCHED, foodMatch.status)
+        assertEquals("skill_food", foodMatch.selectedSkillId)
+
+        // Test Command 2 -> resolves Message
+        val msgCmd = CommandInterpreter.understandCommand("Send message to Alice")
+        val msgMatch = SkillMatcher(repo).match(msgCmd)
+        assertEquals(SkillMatchStatus.MATCHED, msgMatch.status)
+        assertEquals("skill_message", msgMatch.selectedSkillId)
+    }
+
+    @Test
+    fun testM_changedBoundSlot_propagatesToDriverAction() {
+        val repo = SkillRepositoryProvider.getRepository()
+        val workflow = createWorkflow(
+            skillId = "skill_param_test",
+            semanticAction = "INPUT_TEXT",
+            targetResId = "com.example.app:id/search_box",
+            textSlot = "dish",
+            slots = listOf(
+                WorkflowSlot(
+                    name = "dish",
+                    type = SlotType.TEXT,
+                    required = true,
+                    exampleValue = "\${dish}",
+                    provenance = "variable"
+                )
+            )
+        )
+        repo.saveWorkflow(workflow)
+
+        var capturedInputText: String? = null
+        val driver = TestUiDriver(createUiObservation(
+            packageName = "com.example.app",
+            UiElement(
+                elementId = "input_1",
+                role = "EditText",
+                resourceId = "com.example.app:id/search_box",
+                text = "",
+                isEditable = true
+            )
+        ))
+        driver.effect = { step ->
+            capturedInputText = step.inputText
+            driver.screen = createUiObservation(
+                packageName = "com.example.app",
+                UiElement(
+                    elementId = "input_1",
+                    role = "EditText",
+                    resourceId = "com.example.app:id/search_box",
+                    text = step.inputText ?: "",
+                    isEditable = true
+                )
+            )
+        }
+
+        val engine = ExecutionEngine(
+            repository = SkillRepositoryProvider.getRepository(),
+            driver = driver
+        )
+
+        // User changed slot value from "Margherita" to "Farmhouse Deluxe"
+        val request = ExecutionRequest(
+            executionId = "req_param_changed",
+            skillId = "skill_param_test",
+            boundSlots = mapOf("dish" to "Farmhouse Deluxe")
+        )
+
+        val report = runSuspend { engine.execute(request) }
+
+        assertTrue(report.result.success)
+        assertEquals("Farmhouse Deluxe", capturedInputText)
     }
 }

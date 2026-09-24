@@ -527,7 +527,15 @@ object TraceViewer {
      * Formats Phase 12 ExecutionRequestBuildResult into a structured human-readable summary.
      */
     fun formatExecutionRequestResult(result: com.chockXlate.teachablevoice.command.request.ExecutionRequestBuildResult): String {
-        return com.chockXlate.teachablevoice.command.request.Person1MockRuntime.formatMockHandoff(result)
+        return buildString {
+            appendLine("EXECUTION REQUEST PREVIEW — NO ACTION PERFORMED")
+            appendLine("Status: ${result.status}")
+            appendLine("Skill: ${result.skillId ?: "None"}")
+            appendLine("Execution ID: ${result.executionRequest?.executionId ?: "Not created"}")
+            appendLine("Missing slots: ${result.missingSlots.joinToString().ifBlank { "None" }}")
+            result.rejectionReason?.let { appendLine("Reason: $it") }
+            appendLine("Use EXECUTE RUNTIME to submit a freshly bound command.")
+        }
     }
 
     /**
@@ -558,7 +566,7 @@ object TraceViewer {
         if (result.finalState == com.chockXlate.teachablevoice.contract.runtime.ExecutionState.PAUSED_FOR_HANDOFF) {
             sb.appendLine(">>> AUTOMATION PAUSED — USER ACTION REQUIRED <<<")
             sb.appendLine("Handoff Reason: ${result.errorMessage ?: "User confirmation required."}")
-            sb.appendLine("Safety boundary active. Zero automated Accessibility actions performed.")
+            sb.appendLine("Safety boundary active. No further automated Accessibility actions are allowed until explicit reset.")
             sb.appendLine("--------------------------------------------------")
         }
 

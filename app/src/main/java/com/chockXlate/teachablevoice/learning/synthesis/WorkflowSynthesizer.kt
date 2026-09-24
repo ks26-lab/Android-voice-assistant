@@ -61,7 +61,12 @@ object WorkflowSynthesizer {
 
         for (inf in inferenceResult.slotInferences) {
             val slotName = inf.slotName
-            val isSensitiveSlot = SENSITIVE_KEYWORDS.any { kw -> slotName.lowercase().contains(kw) }
+            val isSensitiveSlot = SENSITIVE_KEYWORDS.any { kw -> slotName.lowercase().contains(kw) } ||
+                semanticActions.any { action ->
+                    val labels = listOfNotNull(action.target?.resourceId, action.target?.text, action.target?.contentDescription)
+                    labels.any { label -> SENSITIVE_KEYWORDS.any { label.contains(it, true) } } &&
+                        (action.actionId in inf.sourceActionIds || inf.rawValues.any { it == action.inputValue })
+                }
             val sanitizedExample = if (isSensitiveSlot) "[REDACTED_SENSITIVE]" else inf.rawValues.firstOrNull()?.trim()
 
             when (inf.status) {
@@ -127,15 +132,16 @@ object WorkflowSynthesizer {
             val targetResId = target?.resourceId?.lowercase() ?: ""
             val targetText = target?.text?.lowercase() ?: ""
             val lowerInput = inputVal.lowercase()
+            val targetDescription = target?.contentDescription?.lowercase().orEmpty()
 
             val containsSensitiveKeyword = SENSITIVE_KEYWORDS.any { kw ->
-                targetResId.contains(kw) || targetText.contains(kw) || lowerInput.contains(kw)
+                targetResId.contains(kw) || targetText.contains(kw) || targetDescription.contains(kw) || lowerInput.contains(kw)
             }
 
             if (containsSensitiveKeyword) {
                 requiresConfirmation = true
                 SENSITIVE_KEYWORDS.filter { kw ->
-                    targetResId.contains(kw) || targetText.contains(kw) || lowerInput.contains(kw)
+                    targetResId.contains(kw) || targetText.contains(kw) || targetDescription.contains(kw) || lowerInput.contains(kw)
                 }.forEach { kw ->
                     if (kw !in detectedSensitiveKeywords) detectedSensitiveKeywords.add(kw)
                 }
@@ -149,7 +155,7 @@ object WorkflowSynthesizer {
             // Check if input value matches a VARIABLE slot
             val matchingVarSlot = variableSlotNames.find { vSlot ->
                 val inf = inferenceResult.slotInferences.find { it.slotName == vSlot }
-                inf != null && inf.rawValues.any { rv -> rv.equals(inputVal, ignoreCase = true) }
+                inf != null && inf.rawValues.any { rv -> rv.equals(inputVal.ifBlank { target?.text.orEmpty() }, ignoreCase = true) }
             }
 
             if (matchingVarSlot != null) {
@@ -172,17 +178,17 @@ object WorkflowSynthesizer {
                 role = target?.role,
                 text = selectorText,
                 textSlot = textSlotRef,
-                contentDescription = null,
+                contentDescription = if (containsSensitiveKeyword) null else target?.contentDescription,
                 resourceId = target?.resourceId,
-                parentRole = null,
-                ancestorRole = null,
+                parentRole = target?.parentRole,
+                ancestorRole = target?.ancestorRole,
                 nearbyText = null,
                 relativePosition = null
             )
 
             // Parameters map for step action
             val params = mutableMapOf<String, String>()
-            if (textSlotRef != null) {
+            if (textSlotRef != null && action.actionType == com.chockXlate.teachablevoice.learning.actions.SemanticActionType.INPUT_TEXT) {
                 params["input_parameter"] = textSlotRef
             } else if (inputVal.isNotBlank() && !containsSensitiveKeyword) {
                 params["input_literal"] = inputVal
@@ -201,8 +207,8 @@ object WorkflowSynthesizer {
             val expectedTransition = if (matchingState != null) {
                 ExpectedTransition(
                     schemaVersion = "1.0",
-                    fromState = "state_${matchingState.causeActionId}",
-                    toState = matchingState.afterState.stateId,
+                    fromState = preconditions.fromState,
+                    toState = "state_step_${index + 1}",
                     transitionType = "UI_STATE_CHANGE",
                     expectedPackage = matchingState.afterState.appContext,
                     timeoutMs = 5000L
@@ -256,7 +262,7 @@ object WorkflowSynthesizer {
                 role = "Action",
                 text = if (textSlotRef != null) null else intentName,
                 textSlot = textSlotRef,
-                resourceId = "${trace.appContext.ifBlank { "com.teachablevoice.app" }}:id/action_${intentName}"
+                resourceId = null
             )
             val params = mutableMapOf<String, String>()
             if (textSlotRef != null) {

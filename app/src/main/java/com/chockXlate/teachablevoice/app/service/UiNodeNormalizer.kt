@@ -48,8 +48,9 @@ object UiNodeNormalizer {
         val className = node.className?.toString() ?: "android.view.View"
         val simpleRole = className.substringAfterLast('.')
 
-        val text = node.text?.toString()
-        val contentDescription = node.contentDescription?.toString()
+        val protected = TeachingPrivacyGuard.protectedField(node)
+        val text = if (protected) null else node.text?.toString()
+        val contentDescription = if (protected) null else node.contentDescription?.toString()
         val resourceId = node.viewIdResourceName
 
         val boundsRect = Rect()
@@ -67,6 +68,7 @@ object UiNodeNormalizer {
         for (i in 0 until node.childCount) {
             val childNode = node.getChild(i)
             if (childNode != null) {
+                try {
                 val childElement = normalizeNode(
                     node = childNode,
                     parentRole = simpleRole,
@@ -74,7 +76,7 @@ object UiNodeNormalizer {
                     allElementsList = allElementsList
                 )
                 children.add(childElement)
-                childNode.recycle()
+                } finally { childNode.recycle() }
             }
         }
 

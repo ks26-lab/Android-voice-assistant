@@ -23,7 +23,21 @@ object SemanticActionExtractor {
             .map { it.actionEvent }
             .ifEmpty { trace.userActions }
 
-        val sortedActions = actionEvents.sortedBy { it.timestamp }
+        // Accessibility emits one text-change action per keystroke. A contiguous edit of the
+        // same identifiable field teaches its final value, not replay of intermediate prefixes.
+        val sortedActions = mutableListOf<ActionEvent>()
+        for (action in actionEvents.sortedBy { it.timestamp }) {
+            val previous = sortedActions.lastOrNull()
+            val selector = action.semanticSelector
+            val previousSelector = previous?.semanticSelector
+            val sameField = previousSelector != null && selector.role == previousSelector.role &&
+                ((selector.resourceId != null && selector.resourceId == previousSelector.resourceId) ||
+                    (selector.resourceId == null && previousSelector.resourceId == null &&
+                        selector.contentDescription != null && selector.contentDescription == previousSelector.contentDescription))
+            if (action.actionType == "INPUT_TEXT" && previous?.actionType == "INPUT_TEXT" && sameField) {
+                sortedActions[sortedActions.lastIndex] = action
+            } else sortedActions.add(action)
+        }
 
         for (rawAction in sortedActions) {
             val semanticAction = classifyAndExtract(rawAction, trace.appContext)
