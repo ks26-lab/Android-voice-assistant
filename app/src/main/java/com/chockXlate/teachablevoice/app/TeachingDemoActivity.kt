@@ -1,24 +1,44 @@
 package com.chockXlate.teachablevoice.app
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.chockXlate.teachablevoice.app.service.TeachableVoiceAccessibilityService
+import com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter
+import com.chockXlate.teachablevoice.command.matching.SkillMatchStatus
+import com.chockXlate.teachablevoice.command.matching.SkillMatcher
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestBuildResult
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestBuilder
+import com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus
 import com.chockXlate.teachablevoice.contract.event.ActionEvent
+import com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest
+import com.chockXlate.teachablevoice.contract.runtime.ExecutionState
 import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
 import com.chockXlate.teachablevoice.contract.workflow.SemanticSelector
+import com.chockXlate.teachablevoice.runtime.ExecutionEngine
+import com.chockXlate.teachablevoice.runtime.trace.RuntimeReport
+import com.chockXlate.teachablevoice.runtime.ui.AccessibilityUiDriver
+import com.chockXlate.teachablevoice.skill.repository.SkillRepositoryProvider
 import com.chockXlate.teachablevoice.teach.capture.TeachingSessionManager
 import com.chockXlate.teachablevoice.teach.trace.TraceViewer
 import com.chockXlate.teachablevoice.teach.voice.VoiceCaptureController
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 
 /**
  * Demonstrable UI Activity for Person 1 Phase 1: Teaching Capture.
@@ -88,18 +108,12 @@ class TeachingDemoActivity : Activity() {
         }
         setupCard.addView(intentInput)
 
-        val sessionButtonsLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 0)
-        }
-
         val startBtn = Button(this).apply {
             text = "START TEACHING"
             setBackgroundColor(Color.parseColor("#2E7D32"))
             setTextColor(Color.WHITE)
             setOnClickListener { startTeachingSession() }
         }
-        sessionButtonsLayout.addView(startBtn)
 
         val stopBtn = Button(this).apply {
             text = "STOP TEACHING"
@@ -107,7 +121,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { stopTeachingSession() }
         }
-        sessionButtonsLayout.addView(stopBtn)
 
         val normalizeBtn = Button(this).apply {
             text = "NORMALIZE TRACE (PHASE 2)"
@@ -115,7 +128,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { normalizeCurrentTrace() }
         }
-        sessionButtonsLayout.addView(normalizeBtn)
 
         val semanticBtn = Button(this).apply {
             text = "EXTRACT SEMANTIC ACTIONS (PHASE 3)"
@@ -123,7 +135,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractSemanticActionsPhase3() }
         }
-        sessionButtonsLayout.addView(semanticBtn)
 
         val intentBtn = Button(this).apply {
             text = "EXTRACT INTENT (PHASE 4)"
@@ -131,7 +142,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractIntentPhase4() }
         }
-        sessionButtonsLayout.addView(intentBtn)
 
         val slotsBtn = Button(this).apply {
             text = "EXTRACT SLOTS (PHASE 5)"
@@ -139,7 +149,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { extractSlotsPhase5() }
         }
-        sessionButtonsLayout.addView(slotsBtn)
 
         val alignInferBtn = Button(this).apply {
             text = "ALIGN & INFER VARIABLES (PHASE 6)"
@@ -147,7 +156,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { alignAndInferVariablesPhase6() }
         }
-        sessionButtonsLayout.addView(alignInferBtn)
 
         val synthesizeBtn = Button(this).apply {
             text = "SYNTHESIZE WORKFLOW (PHASE 7)"
@@ -155,7 +163,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { synthesizeWorkflowPhase7() }
         }
-        sessionButtonsLayout.addView(synthesizeBtn)
 
         val validateStoreBtn = Button(this).apply {
             text = "VALIDATE & STORE SKILL (PHASE 8)"
@@ -163,7 +170,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { validateAndStoreSkillPhase8() }
         }
-        sessionButtonsLayout.addView(validateStoreBtn)
 
         val inspectBtn = Button(this).apply {
             text = "INSPECT STORED SKILL (PHASE 9)"
@@ -171,7 +177,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { inspectStoredSkillPhase9() }
         }
-        sessionButtonsLayout.addView(inspectBtn)
 
         val understandCmdBtn = Button(this).apply {
             text = "UNDERSTAND NEW COMMAND (PHASE 10)"
@@ -179,7 +184,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { understandNewCommandPhase10() }
         }
-        sessionButtonsLayout.addView(understandCmdBtn)
 
         val matchSkillBtn = Button(this).apply {
             text = "MATCH COMMAND TO SKILL (PHASE 11)"
@@ -187,7 +191,6 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { matchCommandToSkillPhase11() }
         }
-        sessionButtonsLayout.addView(matchSkillBtn)
 
         val createRequestBtn = Button(this).apply {
             text = "CREATE EXECUTION REQUEST (PHASE 12)"
@@ -195,8 +198,61 @@ class TeachingDemoActivity : Activity() {
             setTextColor(Color.WHITE)
             setOnClickListener { createExecutionRequestPhase12() }
         }
-        sessionButtonsLayout.addView(createRequestBtn)
-        setupCard.addView(sessionButtonsLayout)
+
+        val executeRuntimeBtn = Button(this).apply {
+            text = "EXECUTE RUNTIME (PERSON 2)"
+            setBackgroundColor(Color.parseColor("#00897B"))
+            setTextColor(Color.WHITE)
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener { executeWithPerson2Runtime() }
+        }
+
+        val ackHandoffBtn = Button(this).apply {
+            text = "RESET / ACKNOWLEDGE HANDOFF"
+            setBackgroundColor(Color.parseColor("#FB8C00"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { acknowledgeHandoffAndReset() }
+        }
+
+        val cancelRuntimeBtn = Button(this).apply {
+            text = "CANCEL RUNTIME"
+            setBackgroundColor(Color.parseColor("#E53935"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { cancelRuntimeExecution() }
+        }
+
+        val accessibilitySettingsBtn = Button(this).apply {
+            text = "ACCESSIBILITY SETTINGS"
+            setBackgroundColor(Color.parseColor("#1E88E5"))
+            setTextColor(Color.WHITE)
+            setOnClickListener { openAccessibilitySettings() }
+        }
+
+        fun createButtonRow(vararg buttons: Button): View {
+            val hScroll = HorizontalScrollView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 4, 0, 4) }
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            for (btn in buttons) {
+                btn.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 8, 0) }
+                row.addView(btn)
+            }
+            hScroll.addView(row)
+            return hScroll
+        }
+
+        setupCard.addView(createButtonRow(startBtn, stopBtn))
+        setupCard.addView(createButtonRow(normalizeBtn, semanticBtn, intentBtn, slotsBtn, alignInferBtn, synthesizeBtn))
+        setupCard.addView(createButtonRow(validateStoreBtn, inspectBtn, understandCmdBtn, matchSkillBtn, createRequestBtn))
+        setupCard.addView(createButtonRow(executeRuntimeBtn, ackHandoffBtn, cancelRuntimeBtn, accessibilitySettingsBtn))
         rootLayout.addView(setupCard)
 
         // Interactive Voice Capture Section
@@ -581,7 +637,17 @@ class TeachingDemoActivity : Activity() {
         traceInspectorTextView.text = formatted
     }
 
-    private val skillRepo = com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository()
+    private val skillRepo get() = SkillRepositoryProvider.getRepository()
+    private val runtimeEngine by lazy {
+        ExecutionEngine(
+            repository = skillRepo,
+            driver = AccessibilityUiDriver()
+        )
+    }
+
+    private var lastBuildResult: ExecutionRequestBuildResult? = null
+    private var lastExecutionRequest: ExecutionRequest? = null
+    private val isExecuting = AtomicBoolean(false)
 
     private fun validateAndStoreSkillPhase8() {
         val targetTrace1 = TeachingSessionManager.peekSessionTrace() 
@@ -739,7 +805,11 @@ class TeachingDemoActivity : Activity() {
         val matcher = com.chockXlate.teachablevoice.command.matching.SkillMatcher(skillRepo)
         val matchResult = matcher.match(understanding)
 
-        statusTextView.text = "STATUS: PHASE 11 SKILL MATCHED (${matchResult.status}, Skill: ${matchResult.selectedSkillId ?: "None"})"
+        statusTextView.text = when (matchResult.status) {
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> "STATUS: PHASE 11 SKILL MATCHED ('${matchResult.selectedSkillId}')"
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.AMBIGUOUS -> "STATUS: PHASE 11 SKILL MATCH AMBIGUOUS (${matchResult.candidates.size} candidates). Clarification needed."
+            com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.UNKNOWN -> "STATUS: PHASE 11 SKILL MATCH UNKNOWN. Teaching required."
+        }
         statusTextView.setTextColor(
             when (matchResult.status) {
                 com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> Color.parseColor("#00E676")
@@ -815,8 +885,17 @@ class TeachingDemoActivity : Activity() {
             matchResult = matchResult,
             repository = skillRepo
         )
+        lastBuildResult = buildResult
+        lastExecutionRequest = buildResult.executionRequest
 
-        statusTextView.text = "STATUS: PHASE 12 REQUEST (${buildResult.status}, ReqID: ${buildResult.executionRequest?.executionId ?: "None"})"
+        statusTextView.text = when (buildResult.status) {
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2 -> "STATUS: PHASE 12 REQUEST READY (ReqID: ${buildResult.executionRequest?.executionId})"
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_MISSING_REQUIRED_SLOTS -> "STATUS: PHASE 12 REJECTED - Missing slots: ${buildResult.missingSlots.joinToString()}. Clarification needed."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_UNKNOWN_MATCH -> "STATUS: PHASE 12 REJECTED - Unknown skill. Teaching required."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_AMBIGUOUS_MATCH -> "STATUS: PHASE 12 REJECTED - Ambiguous match. Clarification needed."
+            com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.REJECTED_SAFETY_BLOCKED -> "STATUS: PHASE 12 REJECTED - Safety boundary blocked."
+            else -> "STATUS: PHASE 12 REJECTED (${buildResult.rejectionReason ?: buildResult.status.name})"
+        }
         statusTextView.setTextColor(
             if (buildResult.status == com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2)
                 Color.parseColor("#00E676")
@@ -826,6 +905,128 @@ class TeachingDemoActivity : Activity() {
 
         val formatted = TraceViewer.formatExecutionRequestResult(buildResult)
         traceInspectorTextView.text = formatted
+    }
+
+    private fun executeWithPerson2Runtime() {
+        if (!isExecuting.compareAndSet(false, true)) {
+            statusTextView.text = "STATUS: RUNTIME ALREADY EXECUTING"
+            statusTextView.setTextColor(Color.parseColor("#FFD600"))
+            return
+        }
+
+        // Accessibility service readiness check
+        val service = TeachableVoiceAccessibilityService.instance
+        val serviceConnected = service != null && service.isRuntimeReady
+        val teachingActive = service?.isTeachingModeActive == true || TeachingSessionManager.isTeachingActive()
+
+        if (!serviceConnected || teachingActive) {
+            val warningReason = when {
+                !serviceConnected -> "Accessibility service is not connected. Enable TeachableVoice in Settings."
+                else -> "Teaching mode is active. Stop teaching before executing runtime."
+            }
+            statusTextView.text = "STATUS: ACCESSIBILITY NOT READY\n$warningReason"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            traceInspectorTextView.text = "WARNING: $warningReason\n\nClick 'ACCESSIBILITY SETTINGS' to enable the service."
+            isExecuting.set(false)
+            return
+        }
+
+        // Ensure we have an ExecutionRequest
+        var request = lastExecutionRequest
+        if (request == null || lastBuildResult?.status != com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2) {
+            createExecutionRequestPhase12()
+            request = lastExecutionRequest
+        }
+
+        if (request == null || lastBuildResult?.status != com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2) {
+            val reason = lastBuildResult?.rejectionReason ?: "No valid ExecutionRequest ready for Person 2."
+            statusTextView.text = "STATUS: REQUEST NOT READY\n$reason"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            isExecuting.set(false)
+            return
+        }
+
+        statusTextView.text = "STATUS: RUNTIME EXECUTING (${request.executionId})..."
+        statusTextView.setTextColor(Color.parseColor("#00E5FF"))
+        traceInspectorTextView.text = "=== LAUNCHING PERSON 2 EXECUTION ENGINE ===\nExecution ID: ${request.executionId}\nSkill ID: ${request.skillId}\nBound Slots: ${request.boundSlots}\n\nRunning execution off main thread..."
+
+        val targetRequest = request
+        Thread {
+            val suspendBlock: suspend () -> RuntimeReport = {
+                runtimeEngine.execute(targetRequest)
+            }
+            suspendBlock.startCoroutine(object : Continuation<RuntimeReport> {
+                override val context = EmptyCoroutineContext
+                override fun resumeWith(result: Result<RuntimeReport>) {
+                    runOnUiThread {
+                        isExecuting.set(false)
+                        result.onSuccess { report ->
+                            handleRuntimeReport(report)
+                        }.onFailure { error ->
+                            statusTextView.text = "STATUS: RUNTIME UNCAUGHT ERROR (${error.javaClass.simpleName})"
+                            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+                            traceInspectorTextView.text = "RUNTIME ERROR: ${error.message}\n${error.stackTraceToString()}"
+                        }
+                    }
+                }
+            })
+        }.start()
+    }
+
+    private fun handleRuntimeReport(report: RuntimeReport) {
+        val result = report.result
+        when (result.finalState) {
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.COMPLETED -> {
+                statusTextView.text = "STATUS: RUNTIME COMPLETED (${result.stepsCompleted}/${result.totalSteps} steps)"
+                statusTextView.setTextColor(Color.parseColor("#00E676"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.PAUSED_FOR_HANDOFF -> {
+                statusTextView.text = "STATUS: RUNTIME PAUSED FOR HANDOFF\n${result.errorMessage ?: "User handoff required"}"
+                statusTextView.setTextColor(Color.parseColor("#FFD600"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.ABORTED -> {
+                statusTextView.text = "STATUS: RUNTIME ABORTED\n${result.errorMessage ?: "Execution aborted"}"
+                statusTextView.setTextColor(Color.parseColor("#FF9100"))
+            }
+            com.chockXlate.teachablevoice.contract.runtime.ExecutionState.FAILED -> {
+                statusTextView.text = "STATUS: RUNTIME FAILED\n${result.errorMessage ?: "Execution failed"}"
+                statusTextView.setTextColor(Color.parseColor("#FF5252"))
+            }
+            else -> {
+                statusTextView.text = "STATUS: RUNTIME STATE: ${result.finalState}"
+                statusTextView.setTextColor(Color.parseColor("#00E5FF"))
+            }
+        }
+        traceInspectorTextView.text = TraceViewer.formatRuntimeReport(report)
+    }
+
+    private fun acknowledgeHandoffAndReset() {
+        val acknowledged = runtimeEngine.acknowledgeHandoffForNewExecution()
+        if (acknowledged) {
+            statusTextView.text = "STATUS: HANDOFF ACKNOWLEDGED & RESET"
+            statusTextView.setTextColor(Color.parseColor("#00E676"))
+            traceInspectorTextView.text = "Handoff acknowledged. Safety gate reset for new execution."
+        } else {
+            statusTextView.text = "STATUS: CANNOT RESET (Execution currently active)"
+            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+        }
+    }
+
+    private fun cancelRuntimeExecution() {
+        runtimeEngine.cancel()
+        statusTextView.text = "STATUS: RUNTIME CANCELLATION REQUESTED"
+        statusTextView.setTextColor(Color.parseColor("#FF9100"))
+    }
+
+    private fun openAccessibilitySettings() {
+        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            traceInspectorTextView.text = "Unable to open Accessibility Settings: ${e.message}"
+        }
     }
 
     private fun updateLiveTraceDisplay() {

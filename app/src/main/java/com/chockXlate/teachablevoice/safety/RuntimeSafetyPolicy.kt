@@ -22,6 +22,8 @@ class RuntimeSafetyPolicy {
         workflow.safetyBoundary.schemaVersion != "1.0" -> "Unsupported safety boundary schema."
         workflow.safetyBoundary.requiresExplicitUserConfirmation -> "This workflow requires explicit user handoff before automation."
         workflow.safetyBoundary.maxAllowedValue != null -> "A monetary limit is declared, but the contract provides no reliable amount/currency evidence."
+        workflow.steps.any { it.semanticAction.equals("EXECUTE_INTENT", ignoreCase = true) } ->
+            "Voice-only demonstration has no recorded UI actions. Clarification and interactive teaching required."
         else -> null
     }
 
