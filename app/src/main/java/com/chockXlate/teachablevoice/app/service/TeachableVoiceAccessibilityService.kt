@@ -1,6 +1,7 @@
 package com.chockXlate.teachablevoice.app.service
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Intent
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import com.chockXlate.teachablevoice.contract.event.ActionEvent
@@ -25,11 +26,14 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
     }
 
     var isTeachingModeActive: Boolean = false
+    @Volatile var isRuntimeReady: Boolean = false
+        private set
     private var previousUiState: UiState? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        isRuntimeReady = true
         Log.i(TAG, "TeachableVoiceAccessibilityService connected.")
     }
 
@@ -163,13 +167,19 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        isRuntimeReady = false
         Log.w(TAG, "TeachableVoiceAccessibilityService interrupted.")
     }
 
+    override fun onUnbind(intent: Intent?): Boolean {
+        isRuntimeReady = false
+        return super.onUnbind(intent)
+    }
+
     override fun onDestroy() {
+        isRuntimeReady = false
         super.onDestroy()
         instance = null
         Log.i(TAG, "TeachableVoiceAccessibilityService destroyed.")
     }
 }
-

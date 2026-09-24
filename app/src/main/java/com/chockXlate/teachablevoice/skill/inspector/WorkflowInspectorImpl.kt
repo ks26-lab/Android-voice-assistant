@@ -53,10 +53,12 @@ object WorkflowInspectorImpl : WorkflowInspector {
             ""
         }
 
-        val containsCoordinates = jsonString.contains("\"x\":") ||
-                jsonString.contains("\"y\":") ||
-                jsonString.contains("boundsInScreen") ||
-                jsonString.contains("tapPosition")
+        val coordRegex = Regex("""(?:\b[xy]\s*=\s*\d+|\btap\s*\(|\btapPosition|\"[xy]\"\s*:|boundsInScreen)""")
+        val containsCoordinates = coordRegex.containsMatchIn(jsonString) ||
+                workflow.steps.any { step ->
+                    val rel = step.semanticSelector.relativePosition ?: ""
+                    coordRegex.containsMatchIn(rel)
+                }
 
         val coordinateReplayPass = !containsCoordinates && validation.issues.none { it.category == ValidationCategory.COORDINATE_REPLAY }
 

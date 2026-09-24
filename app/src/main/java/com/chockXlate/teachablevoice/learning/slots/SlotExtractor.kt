@@ -37,6 +37,11 @@ object SlotExtractor {
         "navigate" to listOf("destination")
     )
 
+    private fun deterministicSlotId(traceId: String, slotName: String, slotType: SlotType, value: String): String {
+        val seed = "$traceId|$slotName|${slotType.name}|$value"
+        return "slot_${seed.hashCode().toUInt().toString(16)}"
+    }
+
     fun extract(
         trace: DemonstrationTrace,
         semanticActions: List<SemanticAction>,
@@ -80,7 +85,7 @@ object SlotExtractor {
                             CandidateSlotEvidence(
                                 slotName = "address",
                                 slotType = SlotType.ADDRESS,
-                                value = target.text ?: targetText,
+                                value = target?.text ?: targetText,
                                 actionId = action.actionId,
                                 targetRole = targetRole,
                                 targetResourceId = target?.resourceId,
@@ -129,7 +134,7 @@ object SlotExtractor {
 
                 val slot = ExtractedSlot(
                     schemaVersion = "1.0",
-                    slotId = UUID.randomUUID().toString(),
+                    slotId = deterministicSlotId(trace.traceId, slotName, slotType, primaryVal),
                     name = slotName,
                     type = slotType,
                     rawValue = primaryVal,
@@ -164,7 +169,7 @@ object SlotExtractor {
 
                 val slot = ExtractedSlot(
                     schemaVersion = "1.0",
-                    slotId = UUID.randomUUID().toString(),
+                    slotId = deterministicSlotId(trace.traceId, slotName, slotType, primaryVal),
                     name = slotName,
                     type = slotType,
                     rawValue = primaryVal,
@@ -241,7 +246,7 @@ object SlotExtractor {
         }
 
         // Extract Restaurant ("from <XYZ>")
-        val fromMatch = Regex("""\bfrom\s+([A-Za-z0-9\s]+?)(?=\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(transcript)
+        val fromMatch = Regex("""\bfrom\s+([A-Za-z0-9\s'-]+?)(?=\s+to\b|[?.,!$]|$)""", RegexOption.IGNORE_CASE).find(transcript)
         if (fromMatch != null) {
             val restName = fromMatch.groupValues[1].trim()
             if (restName.isNotBlank()) {
@@ -259,7 +264,7 @@ object SlotExtractor {
         }
 
         // Extract Address ("to <XYZ>")
-        val toMatch = Regex("""\bto\s+([A-Za-z0-9\s]+?)$""", RegexOption.IGNORE_CASE).find(transcript)
+        val toMatch = Regex("""\bto\s+([A-Za-z0-9\s'-]+?)[?.,!$]*$""", RegexOption.IGNORE_CASE).find(transcript)
         if (toMatch != null) {
             val addr = toMatch.groupValues[1].trim()
             if (addr.isNotBlank() && !addr.equals("cart", ignoreCase = true)) {
@@ -277,7 +282,7 @@ object SlotExtractor {
         }
 
         // Extract Item ("order <XYZ>" or "<XYZ> pizza")
-        val orderMatch = Regex("""\border\s+(?:a\s+|an\s+|the\s+)?(?:\d+\s+)?([A-Za-z0-9\s]+?)(?=\s+from\b|\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(transcript)
+        val orderMatch = Regex("""\border\s+(?:a\s+|an\s+|the\s+)?(?:\d+\s+)?([A-Za-z0-9\s'-]+?)(?=\s+from\b|\s+to\b|[?.,!$]|$)""", RegexOption.IGNORE_CASE).find(transcript)
         if (orderMatch != null) {
             val itemName = orderMatch.groupValues[1].trim()
             if (itemName.isNotBlank()) {

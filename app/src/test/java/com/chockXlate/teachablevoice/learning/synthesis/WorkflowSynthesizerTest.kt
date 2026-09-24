@@ -238,7 +238,7 @@ class WorkflowSynthesizerTest {
     @Test
     fun test8_semanticActionsBecomeWorkflowSteps() {
         val sa1 = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.INPUT_TEXT, target = SemanticTarget(role = "EditText", resourceId = "id/input"), inputValue = "Subway")
-        val sa2 = SemanticAction(actionId = "sa2", timestamp = 1002L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", text = "Submit"), inputValue = null)
+        val sa2 = SemanticAction(actionId = "sa2", timestamp = 1002L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", text = "Submit"), inputValue = null)
 
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val intRes = IntentExtractionResult(intent = intent, confidence = 1.0, evidenceSummary = "OK")
@@ -249,12 +249,12 @@ class WorkflowSynthesizerTest {
 
         assertEquals(2, result.workflow?.steps?.size)
         assertEquals("INPUT_TEXT", result.workflow?.steps?.get(0)?.semanticAction)
-        assertEquals("CLICK", result.workflow?.steps?.get(1)?.semanticAction)
+        assertEquals("TAP", result.workflow?.steps?.get(1)?.semanticAction)
     }
 
     @Test
     fun test9_workflowStepsDoNotContainCoordinates() {
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", resourceId = "id/btn"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", resourceId = "id/btn"), inputValue = null)
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val intRes = IntentExtractionResult(intent = intent, confidence = 1.0, evidenceSummary = "OK")
         val trace = DemonstrationTrace(traceId = "t1", timestamp = 1000L, appContext = "com.app")
@@ -269,7 +269,7 @@ class WorkflowSynthesizerTest {
 
     @Test
     fun test10_resourceIdsRolesTextUsedAsSemanticSelectors() {
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", resourceId = "com.app:id/checkout_btn", text = "Checkout"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", resourceId = "com.app:id/checkout_btn", text = "Checkout"), inputValue = null)
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val trace = DemonstrationTrace(traceId = "t1", timestamp = 1000L, appContext = "com.app")
 
@@ -287,7 +287,7 @@ class WorkflowSynthesizerTest {
             "Order 2 Margherita pizzas from Pizza Palace to Home",
             "Order 1 Farmhouse pizza from Pizza Palace to Home"
         )
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", text = "Add"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", text = "Add"), inputValue = null)
 
         val result = WorkflowSynthesizer.synthesize(intResult, listOf(sa), SlotExtractionResult(intentName = "order_food"), DemonstrationAlignment.align(emptyList()), infResult, trace)
 
@@ -298,7 +298,7 @@ class WorkflowSynthesizerTest {
 
     @Test
     fun test12_missingStateEvidenceDoesNotFabricateTransitions() {
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", text = "Add"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", text = "Add"), inputValue = null)
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val trace = DemonstrationTrace(traceId = "t1", timestamp = 1000L, appContext = "com.app") // No state events
 
@@ -311,7 +311,7 @@ class WorkflowSynthesizerTest {
 
     @Test
     fun test13_supportedPreconditionsPreserved() {
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button", resourceId = "id/btn", packageName = "com.food.app"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button", resourceId = "id/btn", packageName = "com.food.app"), inputValue = null)
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val trace = DemonstrationTrace(traceId = "t1", timestamp = 1000L, appContext = "com.food.app")
 
@@ -324,7 +324,7 @@ class WorkflowSynthesizerTest {
 
     @Test
     fun test14_unsupportedPreconditionsNotInvented() {
-        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.CLICK, target = SemanticTarget(role = "Button"), inputValue = null)
+        val sa = SemanticAction(actionId = "sa1", timestamp = 1000L, actionType = SemanticActionType.TAP, target = SemanticTarget(role = "Button"), inputValue = null)
         val intent = Intent(intentId = "i1", canonicalName = "order_food", confidence = 1.0, confidenceLevel = "HIGH")
         val trace = DemonstrationTrace(traceId = "t1", timestamp = 1000L, appContext = "")
 

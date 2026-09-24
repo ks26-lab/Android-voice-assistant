@@ -4,6 +4,7 @@ import com.chockXlate.teachablevoice.command.interpretation.CommandUnderstanding
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
+import com.chockXlate.teachablevoice.skill.validation.ValidationSeverity
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 
 /**
@@ -40,7 +41,6 @@ class SkillMatcher(
         }
 
         val cmdIntentCanonical = understandingResult.intent.canonicalName.lowercase().trim()
-        val cmdIntentName = understandingResult.intent.name.lowercase().trim()
 
         val candidateMatches = mutableListOf<SkillCandidateMatch>()
 
@@ -54,14 +54,14 @@ class SkillMatcher(
 
             if (workflow.safetyBoundary.requiresExplicitUserConfirmation) {
                 // If flagged as requiring confirmation or blocked, verify safety status
-                if (validation.diagnostics.any { it.contains("BLOCKED", ignoreCase = true) }) {
+                if (validation.issues.any { it.severity == ValidationSeverity.CRITICAL_SECURITY_BLOCK }) {
                     diagnostics.add("Workflow '${workflow.skillId}' excluded: BLOCKED safety boundary")
                     continue
                 }
             }
 
             val wfIntent = workflow.intent.lowercase().trim()
-            val isIntentMatch = (wfIntent == cmdIntentCanonical || wfIntent == cmdIntentName)
+            val isIntentMatch = (wfIntent == cmdIntentCanonical)
 
             if (!isIntentMatch) {
                 diagnostics.add("Workflow '${workflow.skillId}' excluded: Intent mismatch ('$wfIntent' vs '$cmdIntentCanonical')")

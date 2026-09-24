@@ -598,8 +598,18 @@ class TeachingDemoActivity : Activity() {
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset("demo_01", norm1.normalizedTrace.traceId, intent1, slot1)
 
-        val demo2Voice = com.chockXlate.teachablevoice.contract.event.VoiceEvent("v_demo2", System.currentTimeMillis(), "Order 1 Farmhouse pizza from Pizza Palace to Home")
-        val trace2 = com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace("tr_demo2", System.currentTimeMillis(), norm1.normalizedTrace.appContext, listOf(demo2Voice), listOf(com.chockXlate.teachablevoice.contract.trace.TraceEvent.Voice("v_demo2", System.currentTimeMillis(), demo2Voice)))
+        val demo2Voice = com.chockXlate.teachablevoice.contract.event.VoiceEvent(
+            eventId = "v_demo2",
+            timestamp = System.currentTimeMillis(),
+            transcript = "Order 1 Farmhouse pizza from Pizza Palace to Home"
+        )
+        val trace2 = com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace(
+            traceId = "tr_demo2",
+            timestamp = System.currentTimeMillis(),
+            appContext = norm1.normalizedTrace.appContext,
+            voiceEvents = listOf(demo2Voice),
+            traceEvents = listOf(com.chockXlate.teachablevoice.contract.trace.TraceEvent.Voice("v_demo2", System.currentTimeMillis(), demo2Voice))
+        )
         val norm2 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(trace2)
         val actions2 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm2.normalizedTrace)
         val intent2 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm2.normalizedTrace, actions2)
