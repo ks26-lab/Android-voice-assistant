@@ -2,6 +2,7 @@ package com.chockXlate.teachablevoice.teach.trace
 
 import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
 import com.chockXlate.teachablevoice.contract.trace.TraceEvent
+import com.chockXlate.teachablevoice.teach.normalization.TraceNormalizationResult
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

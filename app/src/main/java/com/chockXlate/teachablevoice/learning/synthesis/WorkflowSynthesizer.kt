@@ -155,6 +155,16 @@ object WorkflowSynthesizer {
             if (matchingVarSlot != null) {
                 textSlotRef = "\${$matchingVarSlot}"
                 selectorText = null // Parameterized variable step
+            } else if (!containsSensitiveKeyword) {
+                val matchingConstSlot = constantSlotNames.find { cSlot ->
+                    val inf = inferenceResult.slotInferences.find { it.slotName == cSlot }
+                    inf != null && inf.rawValues.any { rv -> rv.equals(inputVal, ignoreCase = true) }
+                }
+                if (matchingConstSlot != null || (selectorText == null && inputVal.isNotBlank())) {
+                    if (selectorText == null && inputVal.isNotBlank()) {
+                        selectorText = inputVal
+                    }
+                }
             }
 
             val selector = SemanticSelector(
@@ -192,7 +202,7 @@ object WorkflowSynthesizer {
                 ExpectedTransition(
                     schemaVersion = "1.0",
                     fromState = "state_${matchingState.causeActionId}",
-                    toState = "state_after_${matchingState.stateId}",
+                    toState = matchingState.afterState.stateId,
                     transitionType = "UI_STATE_CHANGE",
                     expectedPackage = matchingState.afterState.appContext,
                     timeoutMs = 5000L
@@ -236,6 +246,51 @@ object WorkflowSynthesizer {
             workflowSteps.add(step)
         }
 
+        // Synthesize canonical semantic fallback step when actions are empty but valid intent exists
+        if (workflowSteps.isEmpty()) {
+            val stepId = "step_1_${intentName}"
+            val varSlot = workflowSlots.firstOrNull { it.required && it.name in variableSlotNames }
+            val textSlotRef = varSlot?.let { "\${${it.name}}" }
+            val selector = SemanticSelector(
+                schemaVersion = "1.0",
+                role = "Action",
+                text = if (textSlotRef != null) null else intentName,
+                textSlot = textSlotRef,
+                resourceId = "${trace.appContext.ifBlank { "com.teachablevoice.app" }}:id/action_${intentName}"
+            )
+            val params = mutableMapOf<String, String>()
+            if (textSlotRef != null) {
+                params["input_parameter"] = textSlotRef
+            }
+            val step = WorkflowStep(
+                schemaVersion = "1.0",
+                stepId = stepId,
+                semanticAction = "EXECUTE_INTENT",
+                semanticSelector = selector,
+                parameters = params,
+                preconditions = Preconditions(
+                    schemaVersion = "1.0",
+                    fromState = "INITIAL_STATE",
+                    requiredPackage = trace.appContext.ifBlank { "com.teachablevoice.app" },
+                    requiredElementPresent = selector
+                ),
+                expectedTransition = ExpectedTransition(
+                    schemaVersion = "1.0",
+                    fromState = "INITIAL_STATE",
+                    toState = "COMPLETED_STATE",
+                    transitionType = "INTENT_EXECUTION"
+                ),
+                recoveryPolicy = RecoveryPolicy(
+                    schemaVersion = "1.0",
+                    maxRetries = 2,
+                    strategy = RecoveryStrategy.RETRY_STEP
+                ),
+                confidence = intentResult.confidence,
+                provenance = "Synthesized from voice demonstration intent '$intentName'"
+            )
+            workflowSteps.add(step)
+        }
+
         val safetyBoundary = SafetyBoundary(
             schemaVersion = "1.0",
             requiresExplicitUserConfirmation = requiresConfirmation,
@@ -243,9 +298,13 @@ object WorkflowSynthesizer {
             restrictedActions = restrictedActionTypes
         )
 
+        val rawSeed = "${intentName}_${trace.traceId}_${trace.appContext}_${workflowSlots.joinToString { it.name }}_${workflowSteps.joinToString { it.stepId }}"
+        val hashBytes = java.security.MessageDigest.getInstance("SHA-256").digest(rawSeed.toByteArray(Charsets.UTF_8))
+        val skillHash = hashBytes.take(4).joinToString("") { "%02x".format(it) }
+
         val workflow = Workflow(
             schemaVersion = "1.0",
-            skillId = "skill_${intentName}_${UUID.randomUUID().toString().take(8)}",
+            skillId = "skill_${intentName}_$skillHash",
             name = "Workflow for $intentName",
             intent = intentName,
             appContext = trace.appContext.ifBlank { "com.teachablevoice.app" },
@@ -263,6 +322,10 @@ object WorkflowSynthesizer {
             else -> SynthesisStatus.VALID
         }
 
+        val provDemoIds = (alignmentResult.alignedDemonstrationIds +
+            inferenceResult.slotInferences.flatMap { it.demonstrationIds } +
+            listOf(trace.traceId)).filter { it.isNotBlank() }.distinct()
+
         return WorkflowSynthesisResult(
             schemaVersion = "1.0",
             workflow = workflow,
@@ -270,7 +333,7 @@ object WorkflowSynthesizer {
             diagnostics = diagnostics,
             warnings = warnings,
             evidenceSummary = "Synthesized ${workflowSteps.size} steps and ${workflowSlots.size} slots for intent '$intentName'.",
-            provenanceDemonstrationIds = alignmentResult.alignedDemonstrationIds,
+            provenanceDemonstrationIds = provDemoIds,
             isExecutable = true
         )
     }

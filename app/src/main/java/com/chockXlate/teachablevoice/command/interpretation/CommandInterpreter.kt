@@ -47,8 +47,11 @@ object CommandInterpreter {
         // 1. Infer Canonical Intent
         val (canonicalIntent, intentConfidence) = inferIntentFromCommand(normalized)
         val intentLevel = if (intentConfidence >= 0.8) "HIGH" else if (intentConfidence >= 0.5) "MEDIUM" else "LOW"
+        val intentHash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest("${canonicalIntent}_${normalized}".toByteArray(Charsets.UTF_8))
+            .take(4).joinToString("") { "%02x".format(it) }
         val intent = Intent(
-            intentId = "cmd_intent_${UUID.randomUUID().toString().take(8)}",
+            intentId = "cmd_intent_$intentHash",
             canonicalName = canonicalIntent,
             confidence = intentConfidence,
             confidenceLevel = intentLevel
@@ -96,9 +99,9 @@ object CommandInterpreter {
     }
 
     private fun inferIntentFromCommand(normalized: String): Pair<String, Double> {
-        val foodPhrases = listOf("order", "get me", "i want", "can you order", "deliver", "buy", "dish", "pizza", "burger", "food", "tacos", "sushi")
+        val foodPhrases = listOf("order", "get me", "can you order", "deliver", "buy", "dish", "pizza", "burger", "food", "tacos", "sushi")
         val messagePhrases = listOf("send message", "text", "whatsapp", "tell", "send a message")
-        val appointmentPhrases = listOf("book", "schedule", "appointment", "reservation")
+        val appointmentPhrases = listOf("book appointment", "schedule appointment", "book haircut", "make reservation", "book a table", "haircut appointment")
         val reminderPhrases = listOf("remind me", "create reminder", "set reminder")
         val navigatePhrases = listOf("navigate to", "take me to", "directions to")
 
@@ -139,7 +142,7 @@ object CommandInterpreter {
             }
 
             // Extract Restaurant ("from <Vendor>")
-            val fromMatch = Regex("""\bfrom\s+([A-Za-z0-9\s]+?)(?=\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(rawCommand)
+            val fromMatch = Regex("""\bfrom\s+([A-Za-z0-9\s'-]+?)(?=\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(rawCommand)
             if (fromMatch != null) {
                 val restName = fromMatch.groupValues[1].trim()
                 if (restName.isNotBlank()) {
@@ -158,7 +161,7 @@ object CommandInterpreter {
             }
 
             // Extract Address ("to <Destination>")
-            val toMatch = Regex("""\bto\s+([A-Za-z0-9\s]+?)$""", RegexOption.IGNORE_CASE).find(rawCommand)
+            val toMatch = Regex("""\bto\s+([A-Za-z0-9\s'-]+?)$""", RegexOption.IGNORE_CASE).find(rawCommand)
             if (toMatch != null) {
                 val addr = toMatch.groupValues[1].trim()
                 if (addr.isNotBlank() && !addr.equals("cart", ignoreCase = true)) {
@@ -176,17 +179,25 @@ object CommandInterpreter {
                 }
             }
 
-            // Extract Item ("order/get me/want <Item>")
-            val orderMatch = Regex("""\b(?:order|get\s+me|want|deliver)\s+(?:a\s+|an\s+|the\s+)?(?:\d+\s+)?([A-Za-z0-9\s]+?)(?=\s+from\b|\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(rawCommand)
+            // Extract Item ("order/get me/want to get/deliver <Item>")
+            val orderMatch = Regex("""\b(?:order|get\s+me|want\s+to\s+get|want\s+to\s+order|want|deliver|can\s+you\s+order|buy)\s+(?:a\s+|an\s+|the\s+)?(?:\d+\s+)?([A-Za-z0-9\s'-]+?)(?=\s+from\b|\s+to\b|\$|$)""", RegexOption.IGNORE_CASE).find(rawCommand)
             if (orderMatch != null) {
-                val itemName = orderMatch.groupValues[1].trim()
-                if (itemName.isNotBlank()) {
+                var itemName = orderMatch.groupValues[1].trim()
+                if (itemName.isNotBlank() && !itemName.equals("food", ignoreCase = true)) {
+                    if (itemName.endsWith("pizzas", ignoreCase = true)) {
+                        itemName = itemName.dropLast(1)
+                    } else if (itemName.endsWith("burgers", ignoreCase = true)) {
+                        itemName = itemName.dropLast(1)
+                    }
+                    val formatted = itemName.split(" ").filter { it.isNotBlank() }.joinToString(" ") { word ->
+                        word.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                    }
                     slots.add(
                         CommandSlot(
                             name = "item",
                             type = SlotType.TEXT,
-                            rawValue = itemName,
-                            typedValue = itemName,
+                            rawValue = formatted,
+                            typedValue = formatted,
                             confidence = 1.0,
                             confidenceLevel = "HIGH",
                             provenance = "Command Item Expression"

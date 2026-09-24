@@ -106,7 +106,27 @@ object ExecutionRequestBuilder {
             )
         }
 
+        // Rule 2: Safety & Sensitive Credential Check (Blocked check takes precedence over generic invalid)
+        val isSensitiveWorkflow = workflow.safetyBoundary.requiresExplicitUserConfirmation ||
+                workflow.safetyBoundary.sensitiveKeywords.any { kw -> SENSITIVE_KEYWORDS.contains(kw.lowercase()) } ||
+                workflow.slots.any { slot -> SENSITIVE_KEYWORDS.contains(slot.name.lowercase()) } ||
+                understandingResult.slots.any { slot -> SENSITIVE_KEYWORDS.contains(slot.name.lowercase()) }
+
         val validation = WorkflowValidator.validate(workflow)
+
+        if (validation.status == ValidationStatus.BLOCKED || isSensitiveWorkflow) {
+            diagnostics.add("Sensitive workflow or credential parameters detected in safety boundary.")
+            return ExecutionRequestBuildResult(
+                status = ExecutionRequestStatus.REJECTED_SAFETY_BLOCKED,
+                executionRequest = null,
+                skillId = workflow.skillId,
+                version = versionOverride ?: repository?.getSkillVersion(workflow.skillId) ?: 1,
+                diagnostics = diagnostics,
+                rejectionReason = "ExecutionRequest NOT CREATED: Sensitive/credential workflow requires user handoff.",
+                handoffMessage = "HANDOFF TO PERSON 2: BLOCKED (Sensitive Credential Workflow)"
+            )
+        }
+
         if (validation.status != ValidationStatus.VALID || !validation.isStoreable) {
             diagnostics.add("Workflow validation status is ${validation.status}")
             return ExecutionRequestBuildResult(
@@ -117,25 +137,6 @@ object ExecutionRequestBuilder {
                 diagnostics = diagnostics,
                 rejectionReason = "ExecutionRequest NOT CREATED: Selected workflow '${workflow.skillId}' fails validation (${validation.status})",
                 handoffMessage = "HANDOFF TO PERSON 2: CANNOT HANDOFF (Workflow Invalid)"
-            )
-        }
-
-        // Rule 3: Safety & Sensitive Credential Check
-        val isSensitiveWorkflow = workflow.safetyBoundary.requiresExplicitUserConfirmation ||
-                workflow.safetyBoundary.sensitiveKeywords.any { kw -> SENSITIVE_KEYWORDS.contains(kw.lowercase()) } ||
-                workflow.slots.any { slot -> SENSITIVE_KEYWORDS.contains(slot.name.lowercase()) } ||
-                understandingResult.slots.any { slot -> SENSITIVE_KEYWORDS.contains(slot.name.lowercase()) }
-
-        if (isSensitiveWorkflow) {
-            diagnostics.add("Sensitive workflow or credential parameters detected in safety boundary.")
-            return ExecutionRequestBuildResult(
-                status = ExecutionRequestStatus.REJECTED_SAFETY_BLOCKED,
-                executionRequest = null,
-                skillId = workflow.skillId,
-                version = versionOverride ?: repository?.getSkillVersion(workflow.skillId) ?: 1,
-                diagnostics = diagnostics,
-                rejectionReason = "ExecutionRequest NOT CREATED: Sensitive/credential workflow requires user handoff.",
-                handoffMessage = "HANDOFF TO PERSON 2: BLOCKED (Sensitive Credential Workflow)"
             )
         }
 

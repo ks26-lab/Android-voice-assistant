@@ -2,7 +2,6 @@ package com.chockXlate.teachablevoice.learning.intent
 
 import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
 import com.chockXlate.teachablevoice.learning.actions.SemanticAction
-import java.util.UUID
 
 /**
  * Generic intent extraction rule definition.
@@ -18,8 +17,39 @@ data class IntentRule(
  */
 object IntentExtractor {
 
+    private fun deterministicIntentId(
+        trace: DemonstrationTrace,
+        canonicalName: String,
+        semanticActions: List<SemanticAction> = emptyList()
+    ): String {
+        val seed = buildString {
+            append(trace.traceId)
+            append('|')
+            append(trace.appContext)
+            append('|')
+            append(canonicalName)
+            append('|')
+            trace.voiceEvents.forEach {
+                append(it.eventId)
+                append(':')
+                append(it.transcript.trim().lowercase())
+                append('|')
+            }
+            semanticActions.forEach {
+                append(it.actionId)
+                append(':')
+                append(it.actionType.name)
+                append(':')
+                append(it.inputValue ?: "")
+                append('|')
+            }
+        }
+
+        return "intent_${seed.hashCode().toUInt().toString(16)}"
+    }
+
     private val GENERIC_RULES = listOf(
-        IntentRule("order_food", listOf("order", "buy", "food", "dish", "meal", "delivery", "restaurant", "pizza", "burger", "cart")),
+        IntentRule("order_food", listOf("order", "buy", "food", "dish", "meal", "delivery", "restaurant", "pizza", "burger", "cart", "add", "menu", "item", "tacos", "sushi")),
         IntentRule("send_message", listOf("send", "message", "text", "chat", "sms", "mail", "email")),
         IntentRule("book_appointment", listOf("book", "schedule", "appointment", "reservation", "calendar")),
         IntentRule("create_reminder", listOf("remind", "reminder", "alarm", "task")),
@@ -50,7 +80,7 @@ object IntentExtractor {
             warnings.add("Insufficient voice and action evidence to extract intent.")
             val unknownIntent = Intent(
                 schemaVersion = "1.0",
-                intentId = UUID.randomUUID().toString(),
+                intentId = deterministicIntentId(trace, "unknown", semanticActions),
                 canonicalName = "unknown",
                 confidence = 0.30,
                 confidenceLevel = "UNKNOWN",
@@ -73,17 +103,40 @@ object IntentExtractor {
         var bestRule: IntentRule? = null
         var maxScore = 0
 
-        val normalizedText = (voiceTranscript ?: "").lowercase()
-        val targetTexts = semanticActions.mapNotNull { it.target?.text?.lowercase() }
+        val normalizedVoice = (voiceTranscript ?: "").lowercase()
+        val normalizedApp = (appContext ?: "").lowercase()
+        val inputValues = semanticActions.mapNotNull { it.inputValue?.lowercase() }
+        val targetTexts = semanticActions.flatMap {
+            listOfNotNull(
+                it.target?.text?.lowercase(),
+                it.target?.resourceId?.lowercase(),
+                it.target?.contentDescription?.lowercase()
+            )
+        }
 
         for (rule in GENERIC_RULES) {
             var score = 0
             for (kw in rule.keywords) {
-                if (normalizedText.contains(kw)) {
+                // Voice evidence has high priority
+                if (normalizedVoice.contains(kw)) {
+                    score += 5
+                }
+                // Action input values represent explicit domain data entered by user (e.g. typing "Pizza")
+                if (inputValues.any { it.contains(kw) }) {
+                    score += 5
+                }
+                // App package context (e.g. "com.food.app")
+                if (normalizedApp.contains(kw)) {
                     score += 3
                 }
+                // Target UI elements (e.g. "ADD" button, "id/dish")
                 if (targetTexts.any { it.contains(kw) }) {
-                    score += 1
+                    // Do not let generic search UI chrome overpower domain evidence
+                    if (rule.canonicalName == "search_information" && inputValues.isNotEmpty()) {
+                        score += 1
+                    } else {
+                        score += 2
+                    }
                 }
             }
             if (score > maxScore) {
@@ -113,7 +166,7 @@ object IntentExtractor {
 
         val intent = Intent(
             schemaVersion = "1.0",
-            intentId = UUID.randomUUID().toString(),
+            intentId = deterministicIntentId(trace, canonicalName, semanticActions),
             canonicalName = canonicalName,
             confidence = confidence,
             confidenceLevel = level,
