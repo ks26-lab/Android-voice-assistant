@@ -10,7 +10,12 @@ import com.chockXlate.teachablevoice.runtime.slots.BoundStep
 import com.chockXlate.teachablevoice.runtime.ui.UiObservation
 import java.util.UUID
 
-data class RuntimeDiagnostic(val stepId: String?, val state: ExecutionState, val decision: ExecutionDecision)
+data class RuntimeDiagnostic(
+    val stepId: String?,
+    val state: ExecutionState,
+    val decision: ExecutionDecision,
+    val verificationEvidence: com.chockXlate.teachablevoice.runtime.verification.EvidenceEvaluationResult? = null
+)
 data class RuntimeReport(
     val result: ExecutionResult,
     val trace: ExecutionTrace,
@@ -25,10 +30,17 @@ class ExecutionTraceRecorder(private val request: ExecutionRequest) {
     private val events = mutableListOf<TraceEvent>()
     private val diagnostics = mutableListOf<RuntimeDiagnostic>()
 
-    fun decision(stepId: String?, state: ExecutionState, type: DecisionType, reason: String, confidence: Double = 1.0) {
+    fun decision(
+        stepId: String?,
+        state: ExecutionState,
+        type: DecisionType,
+        reason: String,
+        confidence: Double = 1.0,
+        evidence: com.chockXlate.teachablevoice.runtime.verification.EvidenceEvaluationResult? = null
+    ) {
         diagnostics.add(RuntimeDiagnostic(stepId, state, ExecutionDecision(
             decisionId = UUID.randomUUID().toString(), type = type, reason = reason, confidence = confidence
-        )))
+        ), evidence))
     }
 
     fun action(step: BoundStep): String {

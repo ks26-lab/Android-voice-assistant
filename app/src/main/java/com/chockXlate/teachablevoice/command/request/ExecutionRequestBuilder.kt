@@ -203,6 +203,20 @@ object ExecutionRequestBuilder {
             )
         }
 
+        val admission = com.chockXlate.teachablevoice.skill.validation.ReplayAdmission.validate(workflow)
+        if (!admission.isStoreable) return ExecutionRequestBuildResult(
+            status = ExecutionRequestStatus.REJECTED_INVALID_WORKFLOW,
+            skillId = workflow.skillId,
+            rejectionReason = admission.issues.joinToString(" ") { it.message },
+            diagnostics = admission.issues.map { it.message },
+            handoffMessage = "Clarification or reteaching is required before replay."
+        )
+
+        com.chockXlate.teachablevoice.runtime.slots.SlotBinder.bind(workflow, boundSlots).error?.let { reason ->
+            return ExecutionRequestBuildResult(status = ExecutionRequestStatus.REJECTED_INVALID_WORKFLOW,
+                skillId = workflow.skillId, rejectionReason = reason, handoffMessage = "Clarify the supplied values before replay.")
+        }
+
         // Rule 6: Construct Valid ExecutionRequest
         val version = versionOverride ?: repository?.getSkillVersion(workflow.skillId)?.coerceAtLeast(1) ?: matchResult.selectedVersion ?: 1
         val execId = overrideExecutionId ?: generateDeterministicExecutionId(workflow.skillId, boundSlots)

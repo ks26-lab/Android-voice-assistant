@@ -17,6 +17,7 @@ import com.chockXlate.teachablevoice.learning.inference.InferenceResult
 import com.chockXlate.teachablevoice.learning.inference.SlotInferenceStatus
 import com.chockXlate.teachablevoice.learning.intent.IntentExtractionResult
 import com.chockXlate.teachablevoice.learning.slots.SlotExtractionResult
+import com.chockXlate.teachablevoice.learning.targets.SemanticTarget
 import java.util.UUID
 
 /**
@@ -41,6 +42,11 @@ object WorkflowSynthesizer {
     ): WorkflowSynthesisResult {
         val diagnostics = mutableListOf<String>()
         val warnings = mutableListOf<String>()
+
+        if (inferenceResult.slotInferences.any { it.status == SlotInferenceStatus.CONFLICTING } || slotResult.conflicts.isNotEmpty()) {
+            return WorkflowSynthesisResult(status = SynthesisStatus.BLOCKED, isExecutable = false,
+                diagnostics = listOf("Conflicting teaching evidence must be resolved by a consistent demonstration before saving. No literal fallback is allowed."))
+        }
 
         val intentName = intentResult.intent.canonicalName
         if (intentName.equals("unknown", ignoreCase = true) || intentResult.confidence < 0.3) {
@@ -205,13 +211,127 @@ object WorkflowSynthesizer {
             // Expected Transition from actual state events
             val matchingState = stateMap[action.actionId]
             val expectedTransition = if (matchingState != null) {
+                val beforeState = matchingState.beforeState
+                val afterState = matchingState.afterState
+                val evidenceList = mutableListOf<com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement>()
+
+                // 1. Package transition
+                if (afterState.appContext.isNotBlank() && beforeState.appContext.isNotBlank() && afterState.appContext != beforeState.appContext) {
+                    evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                        type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.EXPECTED_PACKAGE,
+                        expectedPackage = afterState.appContext,
+                        description = "Active package transitions to '${afterState.appContext}'"
+                    ))
+                }
+
+                // 2. Action-specific outcome
+                when (action.actionType) {
+                    com.chockXlate.teachablevoice.learning.actions.SemanticActionType.INPUT_TEXT -> {
+                        val expectedVal = when {
+                            textSlotRef != null -> textSlotRef
+                            inputVal.isNotBlank() && !containsSensitiveKeyword -> inputVal
+                            target?.text != null && !containsSensitiveKeyword -> target.text
+                            else -> null
+                        }
+                        if (expectedVal != null) {
+                            evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                                type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.TEXT_EQUALS,
+                                selector = selector,
+                                expectedValue = expectedVal,
+                                description = "Target input field contains expected text"
+                            ))
+                        }
+                    }
+                    com.chockXlate.teachablevoice.learning.actions.SemanticActionType.TAP -> {
+                        fun sameElement(e: com.chockXlate.teachablevoice.contract.ui.UiElement, t: com.chockXlate.teachablevoice.learning.targets.SemanticTarget?): Boolean {
+                            if (t == null) return false
+                            if (!t.resourceId.isNullOrBlank() && t.resourceId == e.resourceId) return true
+                            if (!t.contentDescription.isNullOrBlank() && t.contentDescription == e.contentDescription) return true
+                            if (!t.text.isNullOrBlank() && t.text == e.text && t.role == e.role) return true
+                            return false
+                        }
+                        val targetBefore = beforeState.allElements.find { sameElement(it, target) }
+                        val targetAfter = afterState.allElements.find { sameElement(it, target) }
+
+                        if (targetBefore != null && targetAfter != null && targetBefore.isChecked != targetAfter.isChecked) {
+                            evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                                type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.CHECKED_STATE,
+                                selector = selector,
+                                expectedChecked = targetAfter.isChecked,
+                                description = "Target element checked state becomes ${targetAfter.isChecked}"
+                            ))
+                        } else if (targetBefore != null && targetAfter != null && targetBefore.isSelected != targetAfter.isSelected) {
+                            evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                                type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.SELECTED_STATE,
+                                selector = selector,
+                                expectedSelected = targetAfter.isSelected,
+                                description = "Target element selected state becomes ${targetAfter.isSelected}"
+                            ))
+                        } else if (targetBefore != null && targetAfter == null) {
+                            evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                                type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.ELEMENT_DISAPPEARED,
+                                selector = selector,
+                                description = "Target element disappears after click"
+                            ))
+                        } else {
+                            val appeared = afterState.allElements.filter { a ->
+                                val hasIdentity = !a.resourceId.isNullOrBlank() || (!a.text.isNullOrBlank() && a.text.length >= 2) || !a.contentDescription.isNullOrBlank()
+                                hasIdentity && beforeState.allElements.none { b ->
+                                    (!b.resourceId.isNullOrBlank() && b.resourceId == a.resourceId) ||
+                                    (!b.contentDescription.isNullOrBlank() && b.contentDescription == a.contentDescription) ||
+                                    (!b.text.isNullOrBlank() && b.text == a.text && b.role == a.role)
+                                }
+                            }
+                            val salient = appeared.firstOrNull { it.isClickable && !it.text.isNullOrBlank() }
+                                ?: appeared.firstOrNull { !it.text.isNullOrBlank() }
+                                ?: appeared.firstOrNull { !it.resourceId.isNullOrBlank() }
+                                ?: appeared.firstOrNull()
+                            if (salient != null) {
+                                val isSensitive = SENSITIVE_KEYWORDS.any { kw ->
+                                    salient.text?.lowercase()?.contains(kw) == true ||
+                                    salient.contentDescription?.lowercase()?.contains(kw) == true ||
+                                    salient.resourceId?.lowercase()?.contains(kw) == true
+                                }
+                                val appearedSel = SemanticSelector(
+                                    schemaVersion = "1.0",
+                                    role = salient.role,
+                                    text = if (isSensitive) null else salient.text,
+                                    contentDescription = if (isSensitive) null else salient.contentDescription,
+                                    resourceId = salient.resourceId,
+                                    parentRole = salient.parentRole
+                                )
+                                evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                                    type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.ELEMENT_APPEARED,
+                                    selector = appearedSel,
+                                    description = "Expected element appeared: ${salient.text ?: salient.contentDescription ?: salient.resourceId ?: salient.role}"
+                                ))
+                            }
+                        }
+                    }
+                    else -> {}
+                }
+
+                if (evidenceList.isEmpty()) {
+                    evidenceList.add(com.chockXlate.teachablevoice.contract.workflow.StateEvidenceRequirement(
+                        type = com.chockXlate.teachablevoice.contract.workflow.EvidenceType.GENERIC_STATE_CHANGE,
+                        description = "Semantic UI state changed after action"
+                    ))
+                }
+
+                val appearedSel = evidenceList.firstOrNull { it.type == com.chockXlate.teachablevoice.contract.workflow.EvidenceType.ELEMENT_APPEARED }?.selector
+                val disappearedSel = evidenceList.firstOrNull { it.type == com.chockXlate.teachablevoice.contract.workflow.EvidenceType.ELEMENT_DISAPPEARED }?.selector
+
                 ExpectedTransition(
                     schemaVersion = "1.0",
                     fromState = preconditions.fromState,
                     toState = "state_step_${index + 1}",
                     transitionType = "UI_STATE_CHANGE",
                     expectedPackage = matchingState.afterState.appContext,
-                    timeoutMs = 5000L
+                    expectedElementAppeared = appearedSel,
+                    expectedElementDisappeared = disappearedSel,
+                    timeoutMs = 5000L,
+                    expectedEvidence = evidenceList,
+                    evidenceOperator = com.chockXlate.teachablevoice.contract.workflow.EvidenceOperator.ALL_REQUIRED
                 )
             } else {
                 ExpectedTransition(
@@ -315,11 +435,17 @@ object WorkflowSynthesizer {
             intent = intentName,
             appContext = trace.appContext.ifBlank { "com.teachablevoice.app" },
             slots = workflowSlots.sortedBy { it.name },
-            steps = workflowSteps,
+            steps = QuantityPattern.parameterize(workflowSteps, semanticActions, trace, workflowSlots),
             safetyBoundary = safetyBoundary
         )
 
+        val compatibility = com.chockXlate.teachablevoice.skill.validation.ReplayAdmission.problems(workflow) +
+            inferenceResult.slotInferences.filter { it.status == SlotInferenceStatus.UNKNOWN }.map {
+                "Confirm whether '${it.slotName}' is variable or constant before saving."
+            }
+        diagnostics.addAll(compatibility)
         val overallStatus = when {
+            compatibility.isNotEmpty() -> SynthesisStatus.DEGRADED
             requiresConfirmation -> {
                 diagnostics.add("Safety boundary active: Credential/payment keywords detected. Handoff policy enabled.")
                 SynthesisStatus.DEGRADED
@@ -338,9 +464,9 @@ object WorkflowSynthesizer {
             status = overallStatus,
             diagnostics = diagnostics,
             warnings = warnings,
-            evidenceSummary = "Synthesized ${workflowSteps.size} steps and ${workflowSlots.size} slots for intent '$intentName'.",
+            evidenceSummary = "Synthesized ${workflow.steps.size} steps and ${workflowSlots.size} slots for intent '$intentName'.",
             provenanceDemonstrationIds = provDemoIds,
-            isExecutable = true
+            isExecutable = compatibility.isEmpty() && !requiresConfirmation
         )
     }
 }

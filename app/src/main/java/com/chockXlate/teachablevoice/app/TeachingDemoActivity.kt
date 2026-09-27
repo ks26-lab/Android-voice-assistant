@@ -552,15 +552,20 @@ class TeachingDemoActivity : Activity() {
             trace = norm1.normalizedTrace
         )
 
+        if (!synthesisResult.isExecutable) {
+            statusTextView.text = "Workflow requires clarification or reteaching; not stored."
+            traceInspectorTextView.text = TraceViewer.formatWorkflowSynthesis(synthesisResult)
+            return
+        }
         val workflow = synthesisResult.workflow
-        val validation = com.chockXlate.teachablevoice.skill.validation.WorkflowValidator.validate(workflow)
+        val validation = com.chockXlate.teachablevoice.skill.validation.ReplayAdmission.validate(workflow)
 
         var saved = false
         var retrieved: com.chockXlate.teachablevoice.contract.workflow.Workflow? = null
         var version = 0
 
         if (workflow != null && validation.isStoreable) {
-            saved = skillRepo.saveWorkflow(workflow)
+            saved = skillRepo.saveReplayableWorkflow(workflow)
             if (saved) {
                 retrieved = skillRepo.getWorkflowById(workflow.skillId)
                 version = skillRepo.getSkillVersion(workflow.skillId)

@@ -6,13 +6,19 @@ import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Thread-safe, deterministic local in-memory/JSON-backed implementation of [SkillRepository].
+ * Thread-safe, deterministic local in-memory implementation of [SkillRepository].
  * Enforces validation prior to storage and rejects INVALID or BLOCKED workflows.
  */
 class LocalSkillRepository : SkillRepository {
 
     private val store = ConcurrentHashMap<String, Workflow>()
     private val versionStore = ConcurrentHashMap<String, Int>()
+
+    /** Production admission. saveWorkflow retains structural draft/import compatibility. */
+    fun saveReplayableWorkflow(workflow: Workflow): Boolean {
+        if (!com.chockXlate.teachablevoice.skill.validation.ReplayAdmission.validate(workflow).isStoreable) return false
+        return saveWorkflow(workflow)
+    }
 
     override fun saveWorkflow(workflow: Workflow): Boolean {
         // Step 1: Validate Workflow prior to storage

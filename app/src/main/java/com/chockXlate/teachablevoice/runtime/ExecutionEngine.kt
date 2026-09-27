@@ -82,6 +82,7 @@ class ExecutionEngine(
             runGate.policy.admission(workflow)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
             val binding = SlotBinder.bind(workflow, request.boundSlots)
             binding.error?.let { return finish(ExecutionState.FAILED, it) }
+            total = binding.steps.size
             if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service is unavailable. Enable and connect it before execution.")
             // Reject unsupported verification before performing any workflow side effects.
             for (step in binding.steps) {
@@ -131,7 +132,7 @@ class ExecutionEngine(
                                 step.transition.toState?.let { label ->
                                     knownStates[label] = TransitionVerifier.fingerprint(verification.after!!)
                                 }
-                                recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, verification.reason)
+                                recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, verification.reason, evidence = verification.evidenceResult)
                                 break
                             }
                             failure = if (!action.accepted) action.reason else verification.reason

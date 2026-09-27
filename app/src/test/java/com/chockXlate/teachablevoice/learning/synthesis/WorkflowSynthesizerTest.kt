@@ -148,6 +148,7 @@ class WorkflowSynthesizerTest {
         val result = WorkflowSynthesizer.synthesize(intRes, emptyList(), SlotExtractionResult(intentName = "order_food"), DemonstrationAlignment.align(emptyList()), infRes, trace)
 
         assertTrue(result.workflow?.slots?.none { it.name == "special_instructions" } == true)
+        assertFalse(result.isExecutable)
         assertTrue(result.warnings.any { it.contains("special_instructions") })
     }
 
@@ -169,8 +170,10 @@ class WorkflowSynthesizerTest {
 
         val result = WorkflowSynthesizer.synthesize(intRes, emptyList(), SlotExtractionResult(intentName = "order_food"), DemonstrationAlignment.align(emptyList()), infRes, trace)
 
-        assertTrue(result.workflow?.slots?.none { it.name == "restaurant" } == true)
-        assertTrue(result.warnings.any { it.contains("restaurant") })
+        // A conflicting draft must not become an executable literal workflow.
+        assertNull(result.workflow)
+        assertEquals(SynthesisStatus.BLOCKED, result.status)
+        assertFalse(result.isExecutable)
     }
 
     @Test
@@ -452,7 +455,8 @@ class WorkflowSynthesizerTest {
         val decoded = jsonFormatter.decodeFromString(WorkflowSynthesisResult.serializer(), json)
 
         assertEquals("1.0", decoded.schemaVersion)
-        assertEquals(SynthesisStatus.VALID, decoded.status)
+        assertEquals(SynthesisStatus.DEGRADED, decoded.status)
+        assertFalse(decoded.isExecutable)
         assertEquals("order_food", decoded.workflow?.intent)
     }
 
@@ -558,7 +562,7 @@ class WorkflowSynthesizerTest {
         val synthRes = WorkflowSynthesizer.synthesize(intResult, emptyList(), SlotExtractionResult(intentName = "order_food"), DemonstrationAlignment.align(emptyList()), infResult, trace)
         val durationMs = System.currentTimeMillis() - startMs
 
-        assertTrue(synthRes.isExecutable)
+        assertFalse(synthRes.isExecutable) // Voice-only IR is inspectable, not executable.
         assertTrue(durationMs < 1000L) // Instant offline local processing
     }
 
@@ -655,7 +659,8 @@ class WorkflowSynthesizerTest {
 
         val synthRes = WorkflowSynthesizer.synthesize(intResult, emptyList(), SlotExtractionResult(intentName = intResult.intent.canonicalName), DemonstrationAlignment.align(emptyList()), infResult, trace)
 
-        assertEquals(SynthesisStatus.VALID, synthRes.status)
+        assertEquals(SynthesisStatus.DEGRADED, synthRes.status)
+        assertFalse(synthRes.isExecutable)
         assertTrue(synthRes.workflow?.slots?.size == 4)
     }
 

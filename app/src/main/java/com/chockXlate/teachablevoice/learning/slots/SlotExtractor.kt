@@ -66,7 +66,11 @@ object SlotExtractor {
             val targetRole = target?.role ?: ""
 
             if (!inputVal.isNullOrBlank()) {
-                val (slotName, slotType) = inferSlotNameAndType(targetResId, targetText, inputVal)
+                val inferred = inferSlotNameAndType(targetResId, targetText, inputVal)
+                val spoken = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
+                    .understandCommand(fullTranscript).slots.filter { it.rawValue.equals(inputVal, true) || it.typedValue.equals(inputVal, true) }
+                val (slotName, slotType) = if (inferred.first == "input_text" && spoken.size == 1)
+                    spoken.single().let { it.name to it.type } else inferred
                 candidates.add(
                     CandidateSlotEvidence(
                         slotName = slotName,
@@ -117,7 +121,9 @@ object SlotExtractor {
 
             val distinctValues = evList.map { it.value.lowercase() }.distinct()
 
-            if (voiceVal != null && actionVal != null && !voiceVal.equals(actionVal, ignoreCase = true)) {
+            if ((voiceVal != null && actionVal != null && !voiceVal.equals(actionVal, ignoreCase = true)) ||
+                actionEvs.map { it.value.lowercase() }.distinct().size > 1 ||
+                voiceEvs.map { it.value.lowercase() }.distinct().size > 1) {
                 // Conflict detected: retain both sources, flag conflict, assign MEDIUM confidence
                 val conflict = SlotConflict(
                     slotName = slotName,
@@ -128,7 +134,7 @@ object SlotExtractor {
                 conflicts.add(conflict)
                 warnings.add(conflict.description)
 
-                val primaryVal = actionVal // Action input takes priority for raw value display
+                val primaryVal = actionVal ?: voiceVal!! // Preserve evidence; synthesis blocks the conflict.
                 val slotType = evList.first().slotType
                 val typedVal = parseTypedValue(primaryVal, slotType, warnings)
 
@@ -228,76 +234,11 @@ object SlotExtractor {
     }
 
     private fun extractVoiceCandidates(transcript: String, voiceId: String?, candidates: MutableList<CandidateSlotEvidence>) {
-        val lower = transcript.lowercase()
-
-        // Extract Quantity (Integer)
-        val numMatch = Regex("""\b(\d+)\b""").find(transcript)
-        if (numMatch != null) {
-            candidates.add(
-                CandidateSlotEvidence(
-                    slotName = "quantity",
-                    slotType = SlotType.INTEGER,
-                    value = numMatch.groupValues[1],
-                    voiceEventId = voiceId,
-                    transcriptSnippet = transcript,
-                    source = "VOICE"
-                )
-            )
-        }
-
-        // Extract Restaurant ("from <XYZ>")
-        val fromMatch = Regex("""\bfrom\s+([A-Za-z0-9\s'-]+?)(?=\s+to\b|[?.,!$]|$)""", RegexOption.IGNORE_CASE).find(transcript)
-        if (fromMatch != null) {
-            val restName = fromMatch.groupValues[1].trim()
-            if (restName.isNotBlank()) {
-                candidates.add(
-                    CandidateSlotEvidence(
-                        slotName = "restaurant",
-                        slotType = SlotType.TEXT,
-                        value = restName,
-                        voiceEventId = voiceId,
-                        transcriptSnippet = transcript,
-                        source = "VOICE"
-                    )
-                )
-            }
-        }
-
-        // Extract Address ("to <XYZ>")
-        val toMatch = Regex("""\bto\s+([A-Za-z0-9\s'-]+?)[?.,!$]*$""", RegexOption.IGNORE_CASE).find(transcript)
-        if (toMatch != null) {
-            val addr = toMatch.groupValues[1].trim()
-            if (addr.isNotBlank() && !addr.equals("cart", ignoreCase = true)) {
-                candidates.add(
-                    CandidateSlotEvidence(
-                        slotName = "address",
-                        slotType = SlotType.ADDRESS,
-                        value = addr,
-                        voiceEventId = voiceId,
-                        transcriptSnippet = transcript,
-                        source = "VOICE"
-                    )
-                )
-            }
-        }
-
-        // Extract Item ("order <XYZ>" or "<XYZ> pizza")
-        val orderMatch = Regex("""\border\s+(?:a\s+|an\s+|the\s+)?(?:\d+\s+)?([A-Za-z0-9\s'-]+?)(?=\s+from\b|\s+to\b|[?.,!$]|$)""", RegexOption.IGNORE_CASE).find(transcript)
-        if (orderMatch != null) {
-            val itemName = orderMatch.groupValues[1].trim()
-            if (itemName.isNotBlank()) {
-                candidates.add(
-                    CandidateSlotEvidence(
-                        slotName = "item",
-                        slotType = SlotType.TEXT,
-                        value = itemName,
-                        voiceEventId = voiceId,
-                        transcriptSnippet = transcript,
-                        source = "VOICE"
-                    )
-                )
-            }
-        }
+        val understood = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.understandCommand(transcript)
+        for (slot in understood.slots) candidates.add(CandidateSlotEvidence(
+            slotName = slot.name, slotType = slot.type, value = slot.rawValue,
+            voiceEventId = voiceId, transcriptSnippet = transcript, source = "VOICE"
+        ))
     }
 
     private fun parseTypedValue(rawValue: String, type: SlotType, warnings: MutableList<String>): String {

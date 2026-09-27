@@ -43,13 +43,13 @@ class ExecutionRequestBuilderTest {
         requiresExplicitConfirmation: Boolean = false,
         sensitiveKeywords: List<String> = emptyList()
     ): Workflow {
-        val steps = listOf(
-            WorkflowStep(
-                stepId = "step_1",
-                semanticAction = "INPUT_TEXT",
-                semanticSelector = SemanticSelector(role = "EditText", resourceId = "com.example:id/input")
-            )
-        )
+        val steps = slots.mapIndexed { index, slot ->
+            WorkflowStep(stepId = "step_$index", semanticAction = "INPUT_TEXT",
+                semanticSelector = SemanticSelector(role = "EditText", resourceId = "com.example:id/${slot.name}",
+                    textSlot = if (slot.required) slot.name else null),
+                parameters = if (slot.required) emptyMap() else mapOf("input_literal" to slot.exampleValue.orEmpty()))
+        }.ifEmpty { listOf(WorkflowStep(stepId = "continue", semanticAction = "CLICK",
+            semanticSelector = SemanticSelector(text = "Continue"))) }
         return Workflow(
             skillId = skillId,
             name = name,

@@ -145,13 +145,19 @@ object IntentExtractor {
             }
         }
 
+        // Explicit language is authoritative on both teaching and replay. UI/domain words
+        // must not reinterpret a search for food as an ordering command.
+        val spoken = voiceTranscript?.let {
+            com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.understandCommand(it)
+        }
         val canonicalName = when {
+            spoken != null -> spoken.intent.canonicalName
             bestRule != null -> bestRule.canonicalName
-            voiceTranscript != null -> "custom_task"
             else -> "unknown"
         }
 
         val (confidence, level) = when {
+            spoken != null -> Pair(spoken.intentConfidence, spoken.intent.confidenceLevel)
             bestRule != null && voiceTranscript != null -> Pair(1.0, "HIGH")
             bestRule != null || voiceTranscript != null -> Pair(0.75, "MEDIUM")
             semanticActions.isNotEmpty() -> Pair(0.50, "LOW")
@@ -160,7 +166,8 @@ object IntentExtractor {
 
         val reasoning = StringBuilder().apply {
             if (voiceTranscript != null) append("Voice: \"$voiceTranscript\". ")
-            if (bestRule != null) append("Matched canonical rule '${bestRule.canonicalName}' (Score: $maxScore). ")
+            if (spoken != null) append("Canonical command policy: ${spoken.intent.canonicalName}. ")
+            else if (bestRule != null) append("Matched canonical rule '${bestRule.canonicalName}' (Score: $maxScore). ")
             append("Supported by ${semanticActions.size} semantic actions.")
         }.toString()
 

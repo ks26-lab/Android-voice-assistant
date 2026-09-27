@@ -12,7 +12,13 @@ import com.chockXlate.teachablevoice.runtime.matching.MatchStatus
 import com.chockXlate.teachablevoice.safety.SafetyGate
 import java.security.MessageDigest
 
-data class VerificationResult(val verified: Boolean, val reason: String, val after: UiObservation? = null)
+data class VerificationResult(
+    val verified: Boolean,
+    val reason: String,
+    val after: UiObservation? = null,
+    val status: EvidenceEvaluationStatus = if (verified) EvidenceEvaluationStatus.VERIFIED else EvidenceEvaluationStatus.FAILED,
+    val evidenceResult: EvidenceEvaluationResult? = null
+)
 data class VerificationConfig(val pollMs: Long = 100, val maximumTimeoutMs: Long = 10_000) {
     init { require(pollMs > 0 && maximumTimeoutMs in 1..60_000) }
 }
@@ -21,15 +27,23 @@ class TransitionVerifier(
     private val matcher: SemanticMatcher,
     private val config: VerificationConfig = VerificationConfig()
 ) {
+    private val evidenceEngine = StateEvidenceEngine(matcher)
+
     fun unsupported(t: ExpectedTransition): String? = when {
         t.schemaVersion != "1.0" -> "Unsupported transition schema."
         t.timeoutMs <= 0 -> "Transition timeout must be positive."
         t.verification != null -> "The free-form transition verification expression is unsupported."
         t.transitionType !in setOf("STATE_CHANGE", "UI_STATE_CHANGE", "SEMANTIC_ACTION") -> "Unsupported transition type."
+        t.expectedEvidence.any { it.schemaVersion != "1.0" } -> "Unsupported evidence schema version."
+        t.expectedEvidence.any { it.selector?.schemaVersion != null && it.selector.schemaVersion != "1.0" } -> "Unsupported evidence selector schema."
         else -> null
     }
 
     fun startingStateError(step: BoundStep, ui: UiObservation): String? {
+        step.quantityBefore?.let {
+            if (matcher.match(it, ui).status != MatchStatus.MATCHED)
+                return "The quantity counter is missing, ambiguous, or differs from the demonstrated baseline. Restore it before replay."
+        }
         val label = step.transition.fromState ?: return null
         if (step.stateEvidence[label] == fingerprint(ui)) return null
         if (label == step.preconditions.fromState &&
@@ -45,29 +59,34 @@ class TransitionVerifier(
         gate: SafetyGate
     ): VerificationResult {
         val t = step.transition
-        unsupported(t)?.let { return VerificationResult(false, it) }
-        startingStateError(step, before)?.let { return VerificationResult(false, it) }
+        unsupported(t)?.let { return VerificationResult(false, it, status = EvidenceEvaluationStatus.FAILED) }
+        startingStateError(step, before)?.let { return VerificationResult(false, it, status = EvidenceEvaluationStatus.FAILED) }
         val budget = minOf(t.timeoutMs, config.maximumTimeoutMs)
         var waited = 0L
         var last: UiObservation? = null
+        var lastEval: EvidenceEvaluationResult? = null
         while (waited <= budget) {
-            gate.reason()?.let { return VerificationResult(false, it, last) }
-            if (!driver.isReady()) return VerificationResult(false, "Accessibility service disconnected during verification.", last)
+            gate.reason()?.let { return VerificationResult(false, it, last, status = EvidenceEvaluationStatus.FAILED) }
+            if (!driver.isReady()) return VerificationResult(false, "Accessibility service disconnected during verification.", last, status = EvidenceEvaluationStatus.UNCERTAIN)
             val after = driver.observe()
             if (after != null) {
                 last = after
-                gate.check(boundary, after, step)?.let { return VerificationResult(false, it, after) }
-                val packageOk = after.state.appContext == (t.expectedPackage ?: before.state.appContext)
-                val appeared = t.expectedElementAppeared
-                val disappeared = t.expectedElementDisappeared
-                val appearanceOk = appeared == null || (!matcher.present(appeared, before) && matcher.present(appeared, after))
-                val disappearanceOk = disappeared == null || (matcher.present(disappeared, before) && !matcher.present(disappeared, after))
-                val meaningfulChange = fingerprint(before) != fingerprint(after)
-                val inputMatch = if (step.action == RuntimeAction.INPUT_TEXT) matcher.match(step.selector, after, step.action) else null
-                val inputOk = inputMatch == null || (inputMatch.status == MatchStatus.MATCHED && inputMatch.best?.element?.text == step.inputText)
-                if (packageOk && appearanceOk && disappearanceOk && meaningfulChange && inputOk) {
-                    val explicit = appeared != null || disappeared != null || (t.expectedPackage != null && t.expectedPackage != before.state.appContext)
-                    return VerificationResult(true, if (explicit) "Declared transition evidence was observed." else "Weaker verification: semantic UI state changed after the action.", after)
+                gate.check(boundary, after, step)?.let { return VerificationResult(false, it, after, status = EvidenceEvaluationStatus.FAILED) }
+
+                val quantityOk = step.quantityBefore == null ||
+                    (t.expectedElementAppeared != null && matcher.match(t.expectedElementAppeared, after).status == MatchStatus.MATCHED)
+
+                val eval = evidenceEngine.evaluate(before, t, after, step)
+                lastEval = eval
+
+                if (eval.status == EvidenceEvaluationStatus.VERIFIED && quantityOk) {
+                    return VerificationResult(
+                        verified = true,
+                        reason = eval.reason,
+                        after = after,
+                        status = EvidenceEvaluationStatus.VERIFIED,
+                        evidenceResult = eval
+                    )
                 }
             }
             if (waited == budget) break
@@ -75,7 +94,19 @@ class TransitionVerifier(
             driver.awaitChange(delay)
             waited += delay
         }
-        return VerificationResult(false, "Transition timed out without sufficient observable completion evidence.", last)
+        val finalStatus = lastEval?.status ?: EvidenceEvaluationStatus.UNCERTAIN
+        val finalReason = if (lastEval != null && lastEval.contradictory.any { it.type != com.chockXlate.teachablevoice.contract.workflow.EvidenceType.GENERIC_STATE_CHANGE }) {
+            lastEval.reason
+        } else {
+            "Transition timed out without sufficient observable completion evidence."
+        }
+        return VerificationResult(
+            verified = false,
+            reason = finalReason,
+            after = last,
+            status = finalStatus,
+            evidenceResult = lastEval
+        )
     }
 
     companion object {
