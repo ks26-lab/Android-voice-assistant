@@ -61,16 +61,40 @@ class ExecutionTraceRecorder(private val request: ExecutionRequest) {
         )))
     }
 
-    fun finish(state: ExecutionState, completed: Int, total: Int, reason: String?, stoppedStep: String?): RuntimeReport {
+    fun finish(
+        state: ExecutionState,
+        completed: Int,
+        total: Int,
+        reason: String?,
+        stoppedStep: String?,
+        progress: ExecutionProgress? = null,
+        clarificationRequest: ClarificationRequest? = null
+    ): RuntimeReport {
         val result = ExecutionResult(
-            executionId = request.executionId, success = state == ExecutionState.COMPLETED && completed == total && total > 0,
-            finalState = state, stepsCompleted = completed, totalSteps = total, errorMessage = reason,
-            durationMs = (System.nanoTime() - startNanos) / 1_000_000
+            executionId = request.executionId,
+            success = state == ExecutionState.COMPLETED && completed == total && total > 0,
+            finalState = state,
+            stepsCompleted = completed,
+            totalSteps = total,
+            errorMessage = reason,
+            durationMs = (System.nanoTime() - startNanos) / 1_000_000,
+            progress = progress,
+            clarificationRequest = clarificationRequest
         )
-        return RuntimeReport(result, ExecutionTrace(
-            executionId = request.executionId, skillId = request.skillId, startTime = startTime,
-            endTime = System.currentTimeMillis(), events = events.toList(), result = result
-        ), diagnostics.toList(), stoppedStep)
+        return RuntimeReport(
+            result = result,
+            trace = ExecutionTrace(
+                executionId = request.executionId,
+                skillId = request.skillId,
+                startTime = startTime,
+                endTime = System.currentTimeMillis(),
+                events = events.toList(),
+                result = result,
+                progress = progress
+            ),
+            diagnostics = diagnostics.toList(),
+            stoppedStepId = stoppedStep
+        )
     }
 
     private fun redact(state: UiState): UiState = state.copy(

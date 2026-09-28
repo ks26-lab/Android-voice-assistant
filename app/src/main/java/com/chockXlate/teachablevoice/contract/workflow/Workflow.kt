@@ -11,5 +11,7 @@ data class Workflow(
     val appContext: String,
     val slots: List<WorkflowSlot> = emptyList(),
     val steps: List<WorkflowStep> = emptyList(),
-    val safetyBoundary: SafetyBoundary = SafetyBoundary()
+    val safetyBoundary: SafetyBoundary = SafetyBoundary(),
+    val subtasks: List<WorkflowSubtask> = emptyList(),
+    val provenanceGraph: com.chockXlate.teachablevoice.contract.provenance.DemonstrationProvenanceGraph? = null
 )

@@ -11,5 +11,6 @@ data class ExecutionTrace(
     val startTime: Long,
     val endTime: Long? = null,
     val events: List<TraceEvent> = emptyList(),
-    val result: ExecutionResult? = null
+    val result: ExecutionResult? = null,
+    val progress: ExecutionProgress? = null
 )

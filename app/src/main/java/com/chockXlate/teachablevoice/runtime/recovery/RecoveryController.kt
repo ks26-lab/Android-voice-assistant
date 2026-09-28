@@ -3,7 +3,15 @@ package com.chockXlate.teachablevoice.runtime.recovery
 import com.chockXlate.teachablevoice.contract.workflow.RecoveryPolicy
 import com.chockXlate.teachablevoice.contract.workflow.RecoveryStrategy
 
-enum class RecoveryAction { RETRY, HANDOFF, ABORT }
+enum class RecoveryAction {
+    RETRY,
+    RERESOLVE_TARGET,
+    RETRY_NON_SIDE_EFFECTING_STEP_IF_PROVEN_SAFE,
+    ASK_USER,
+    HANDOFF,
+    ABORT
+}
+
 data class RecoveryDecision(val action: RecoveryAction, val reason: String, val delayMs: Long = 0)
 
 class RecoveryController(private val hardRetryLimit: Int = 3) {
@@ -22,5 +30,54 @@ class RecoveryController(private val hardRetryLimit: Int = 3) {
             RecoveryStrategy.HANDOFF_TO_USER -> RecoveryDecision(RecoveryAction.HANDOFF, "Workflow recovery policy requires user handoff.")
             RecoveryStrategy.ABORT -> RecoveryDecision(RecoveryAction.ABORT, "Workflow recovery policy requires abort.")
         }
+    }
+
+    /**
+     * Subtask-local deterministic recovery.
+     * Evaluates UI absence, ambiguity, side-effect safety, and safety boundaries.
+     * Invariant: Never repeats an action if actionAttempted is true and verification was uncertain.
+     */
+    fun decideSubtaskRecovery(
+        policy: RecoveryPolicy,
+        retries: Int,
+        actionAttempted: Boolean,
+        targetAbsentOrAmbiguous: Boolean = false,
+        isAmbiguousMatch: Boolean = false,
+        isNonSideEffecting: Boolean = false,
+        safetyBlocked: Boolean = false
+    ): RecoveryDecision {
+        if (safetyBlocked) {
+            return RecoveryDecision(RecoveryAction.HANDOFF, "Safety boundary prevents recovery action.")
+        }
+        if (policy.strategy == RecoveryStrategy.ABORT) {
+            return RecoveryDecision(RecoveryAction.ABORT, "Workflow recovery policy requires abort.")
+        }
+        if (actionAttempted) {
+            return RecoveryDecision(
+                RecoveryAction.HANDOFF,
+                "An action was dispatched but completion is uncertain. Automatic repetition could duplicate a side effect."
+            )
+        }
+        if (isAmbiguousMatch) {
+            return RecoveryDecision(RecoveryAction.ASK_USER, "Target is ambiguous on current UI. Clarification required.")
+        }
+        if (retries >= retryLimit(policy)) {
+            return RecoveryDecision(RecoveryAction.HANDOFF, "The bounded retry budget is exhausted.")
+        }
+        if (targetAbsentOrAmbiguous) {
+            return RecoveryDecision(
+                RecoveryAction.RERESOLVE_TARGET,
+                "Target temporarily absent or selector varied. Re-observe UI and semantically re-resolve target.",
+                policy.retryDelayMs.coerceIn(0, 2000)
+            )
+        }
+        if (isNonSideEffecting) {
+            return RecoveryDecision(
+                RecoveryAction.RETRY_NON_SIDE_EFFECTING_STEP_IF_PROVEN_SAFE,
+                "Non-side-effecting observation step can be safely retried.",
+                policy.retryDelayMs.coerceIn(0, 2000)
+            )
+        }
+        return decide(policy, retries, actionAttempted)
     }
 }

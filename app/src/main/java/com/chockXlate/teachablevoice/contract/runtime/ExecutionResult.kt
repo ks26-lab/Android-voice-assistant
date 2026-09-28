@@ -11,5 +11,7 @@ data class ExecutionResult(
     val stepsCompleted: Int,
     val totalSteps: Int,
     val errorMessage: String? = null,
-    val durationMs: Long = 0L
+    val durationMs: Long = 0L,
+    val progress: ExecutionProgress? = null,
+    val clarificationRequest: ClarificationRequest? = null
 )

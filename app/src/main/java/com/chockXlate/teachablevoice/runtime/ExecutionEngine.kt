@@ -1,11 +1,15 @@
 package com.chockXlate.teachablevoice.runtime
 
 import com.chockXlate.teachablevoice.contract.runtime.*
+import com.chockXlate.teachablevoice.contract.workflow.Preconditions
+import com.chockXlate.teachablevoice.contract.workflow.Workflow
+import com.chockXlate.teachablevoice.contract.workflow.WorkflowSubtask
 import com.chockXlate.teachablevoice.execution.SemanticExecutor
 import com.chockXlate.teachablevoice.runtime.matching.MatchStatus
 import com.chockXlate.teachablevoice.runtime.matching.SemanticMatcher
 import com.chockXlate.teachablevoice.runtime.recovery.RecoveryAction
 import com.chockXlate.teachablevoice.runtime.recovery.RecoveryController
+import com.chockXlate.teachablevoice.runtime.slots.BoundStep
 import com.chockXlate.teachablevoice.runtime.slots.SlotBinder
 import com.chockXlate.teachablevoice.runtime.trace.ExecutionTraceRecorder
 import com.chockXlate.teachablevoice.runtime.trace.RuntimeReport
@@ -32,9 +36,30 @@ class ExecutionEngine(
     @Volatile var lastReport: RuntimeReport? = null
         private set
 
+    private class PausedExecutionState(
+        val request: ExecutionRequest,
+        val workflow: Workflow,
+        val boundSlots: MutableMap<String, String>,
+        val subtasks: List<WorkflowSubtask>,
+        var pausedSubtaskIndex: Int,
+        var pausedStepIndex: Int,
+        val completedSubtaskIds: MutableList<String>,
+        val completedStepIds: MutableList<String>,
+        val subtaskProgressList: MutableList<SubtaskProgress>,
+        val knownStates: MutableMap<String, String>,
+        var clarificationRequest: ClarificationRequest,
+        val runGate: SafetyGate,
+        val recorder: ExecutionTraceRecorder,
+        val totalSteps: Int,
+        var completedStepsCount: Int
+    )
+
+    @Volatile private var activePausedState: PausedExecutionState? = null
+
     @Synchronized fun cancel() {
         cancelled = true
         gate.block("Execution was cancelled by the user.")
+        activePausedState = null
     }
 
     /** Integration must call only from an explicit user action, after the prior run has returned.
@@ -43,6 +68,7 @@ class ExecutionEngine(
         if (running) return false
         gate = SafetyGate()
         cancelled = false
+        activePausedState = null
         return true
     }
 
@@ -50,26 +76,71 @@ class ExecutionEngine(
         val recorder = ExecutionTraceRecorder(request)
         val runGate = synchronized(this) {
             if (running) null else { running = true; gate }
-        } ?: return recorder.finish(ExecutionState.FAILED, 0, 0, "Another execution is already active.", null)
+        } ?: return recorder.finish(
+            state = ExecutionState.FAILED,
+            completed = 0,
+            total = 0,
+            reason = "Another execution is already active.",
+            stoppedStep = null
+        )
+
+        activePausedState = null
         var completed = 0
         var total = 0
         var stepId: String? = null
-        fun finish(state: ExecutionState, reason: String?): RuntimeReport {
+        var currentSubtaskId: String? = null
+        val completedSubtaskIds = mutableListOf<String>()
+        val completedStepIds = mutableListOf<String>()
+        val subtaskProgressList = mutableListOf<SubtaskProgress>()
+
+        fun buildProgress(overallStatus: ProgressStatus, reason: String?): ExecutionProgress {
+            return ExecutionProgress(
+                schemaVersion = "1.0",
+                executionId = request.executionId,
+                currentSubtaskId = currentSubtaskId,
+                completedSubtaskIds = completedSubtaskIds.toList(),
+                currentStepId = stepId,
+                completedStepIds = completedStepIds.toList(),
+                subtasks = subtaskProgressList.toList(),
+                overallStatus = overallStatus,
+                pauseOrFailureReason = reason
+            )
+        }
+
+        fun finish(state: ExecutionState, reason: String?, clarReq: ClarificationRequest? = null): RuntimeReport {
             val type = when (state) {
                 ExecutionState.COMPLETED -> DecisionType.PROCEED
                 ExecutionState.PAUSED_FOR_HANDOFF -> DecisionType.HANDOFF
                 ExecutionState.ABORTED -> DecisionType.ABORT
+                ExecutionState.WAITING_FOR_USER -> DecisionType.ASK_USER
                 else -> DecisionType.STOP
             }
             if (state == ExecutionState.PAUSED_FOR_HANDOFF) runGate.block(reason ?: "User handoff is required.")
             recorder.decision(stepId, state, type, reason ?: "Every workflow step was verified.")
-            return recorder.finish(state, completed, total, reason, if (state == ExecutionState.COMPLETED) null else stepId).also { lastReport = it }
+            val overallProgStatus = when (state) {
+                ExecutionState.COMPLETED -> ProgressStatus.COMPLETED
+                ExecutionState.WAITING_FOR_USER -> ProgressStatus.WAITING_FOR_USER
+                ExecutionState.FAILED, ExecutionState.ABORTED, ExecutionState.PAUSED_FOR_HANDOFF -> ProgressStatus.FAILED
+                else -> ProgressStatus.ACTIVE
+            }
+            val progress = buildProgress(overallProgStatus, reason)
+            return recorder.finish(
+                state = state,
+                completed = completed,
+                total = total,
+                reason = reason,
+                stoppedStep = if (state == ExecutionState.COMPLETED) null else stepId,
+                progress = progress,
+                clarificationRequest = clarReq
+            ).also { lastReport = it }
         }
+
         fun blocked(): RuntimeReport? = when {
             cancelled -> finish(ExecutionState.ABORTED, "Execution was cancelled by the user.")
             runGate.reason() != null -> finish(ExecutionState.PAUSED_FOR_HANDOFF, runGate.reason())
             else -> null
         }
+
         try {
             blocked()?.let { return it }
             recorder.decision(null, ExecutionState.INITIATED, DecisionType.PROCEED, "Validating runtime request.")
@@ -77,26 +148,401 @@ class ExecutionEngine(
             val resolution = resolver.resolve(request)
             val workflow = resolution.workflow ?: return finish(ExecutionState.FAILED, resolution.error)
             total = workflow.steps.size
-            recorder.decision(null, ExecutionState.INITIATED, DecisionType.PROCEED,
-                "Using current workflow content. The repository interface cannot verify the requested historical version.")
+            recorder.decision(
+                null, ExecutionState.INITIATED, DecisionType.PROCEED,
+                "Using current workflow content. The repository interface cannot verify the requested historical version."
+            )
             runGate.policy.admission(workflow)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
-            val binding = SlotBinder.bind(workflow, request.boundSlots)
+
+            // Subtask structure (backward-compatible: if empty, wraps in single generic subtask)
+            val subtasks = if (workflow.subtasks.isNotEmpty()) workflow.subtasks else listOf(
+                WorkflowSubtask(
+                    schemaVersion = "1.0",
+                    subtaskId = "subtask_1_main",
+                    label = "MAIN_WORKFLOW",
+                    stepIds = workflow.steps.map { it.stepId },
+                    preconditions = workflow.steps.firstOrNull()?.preconditions ?: Preconditions()
+                )
+            )
+
+            // Initialize progress for all subtasks
+            for (st in subtasks) {
+                subtaskProgressList.add(
+                    SubtaskProgress(
+                        schemaVersion = "1.0",
+                        subtaskId = st.subtaskId,
+                        label = st.label,
+                        status = ProgressStatus.PENDING,
+                        stepIds = st.stepIds
+                    )
+                )
+            }
+
+            // Check missing required slots before execution
+            val currentSlots = request.boundSlots.toMutableMap()
+            val missingRequired = workflow.slots.filter { slot ->
+                slot.required && (!currentSlots.containsKey(slot.name) || currentSlots[slot.name].isNullOrBlank())
+            }
+            if (missingRequired.isNotEmpty()) {
+                val missing = missingRequired.first()
+                val isSens = missing.name.lowercase().let {
+                    it.contains("password") || it.contains("pin") || it.contains("otp") ||
+                        it.contains("cvv") || it.contains("card") || it.contains("secret")
+                }
+                if (isSens) {
+                    return finish(
+                        ExecutionState.PAUSED_FOR_HANDOFF,
+                        "Missing sensitive credential parameter '${missing.name}'. Automated entry of credentials is strictly prohibited."
+                    )
+                }
+                val clarReq = ClarificationRequest(
+                    schemaVersion = "1.0",
+                    executionId = request.executionId,
+                    reason = "Missing required parameter '${missing.name}'.",
+                    question = "Please provide the value for '${missing.name}':",
+                    requiredSlot = missing.name,
+                    pausedSubtaskId = subtasks.firstOrNull()?.subtaskId,
+                    pausedStepId = workflow.steps.firstOrNull()?.stepId
+                )
+                currentSubtaskId = subtasks.firstOrNull()?.subtaskId
+                stepId = workflow.steps.firstOrNull()?.stepId
+                if (subtaskProgressList.isNotEmpty()) {
+                    subtaskProgressList[0] = subtaskProgressList[0].copy(status = ProgressStatus.WAITING_FOR_USER)
+                }
+                activePausedState = PausedExecutionState(
+                    request = request,
+                    workflow = workflow,
+                    boundSlots = currentSlots,
+                    subtasks = subtasks,
+                    pausedSubtaskIndex = 0,
+                    pausedStepIndex = 0,
+                    completedSubtaskIds = completedSubtaskIds,
+                    completedStepIds = completedStepIds,
+                    subtaskProgressList = subtaskProgressList,
+                    knownStates = mutableMapOf(),
+                    clarificationRequest = clarReq,
+                    runGate = runGate,
+                    recorder = recorder,
+                    totalSteps = workflow.steps.size,
+                    completedStepsCount = 0
+                )
+                return finish(ExecutionState.WAITING_FOR_USER, clarReq.reason, clarReq)
+            }
+
+            val binding = SlotBinder.bind(workflow, currentSlots)
             binding.error?.let { return finish(ExecutionState.FAILED, it) }
             total = binding.steps.size
-            if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service is unavailable. Enable and connect it before execution.")
+
+            if (!driver.isReady()) {
+                return finish(ExecutionState.FAILED, "Accessibility service is unavailable. Enable and connect it before execution.")
+            }
+
             // Reject unsupported verification before performing any workflow side effects.
             for (step in binding.steps) {
                 stepId = step.source.stepId
                 verifier.unsupported(step.transition)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
-                if (step.source.recoveryPolicy.schemaVersion != "1.0" || step.source.recoveryPolicy.maxRetries < 0 || step.source.recoveryPolicy.retryDelayMs < 0) {
+                if (step.source.recoveryPolicy.schemaVersion != "1.0" ||
+                    step.source.recoveryPolicy.maxRetries < 0 ||
+                    step.source.recoveryPolicy.retryDelayMs < 0) {
                     return finish(ExecutionState.FAILED, "Invalid recovery policy.")
                 }
             }
+
             val knownStates = mutableMapOf<String, String>()
-            for (boundStep in binding.steps) {
+
+            return executeSubtasks(
+                subtasks = subtasks,
+                startSubtaskIndex = 0,
+                startStepIndex = 0,
+                bindingSteps = binding.steps,
+                workflow = workflow,
+                request = request,
+                runGate = runGate,
+                recorder = recorder,
+                knownStates = knownStates,
+                completedSubtaskIds = completedSubtaskIds,
+                completedStepIds = completedStepIds,
+                subtaskProgressList = subtaskProgressList,
+                initialCompleted = completed,
+                total = total,
+                currentSlots = currentSlots
+            )
+        } catch (_: Exception) {
+            runGate.block("Runtime observation or execution failed. Completion cannot be established safely.")
+            return finish(if (cancelled) ExecutionState.ABORTED else ExecutionState.PAUSED_FOR_HANDOFF, runGate.reason())
+        } finally {
+            synchronized(this) { running = false }
+        }
+    }
+
+    suspend fun resume(response: ClarificationResponse): RuntimeReport {
+        val paused = synchronized(this) {
+            val state = activePausedState
+            if (state == null) {
+                return RuntimeReport(
+                    result = ExecutionResult(
+                        executionId = response.executionId,
+                        success = false,
+                        finalState = ExecutionState.FAILED,
+                        stepsCompleted = 0,
+                        totalSteps = 0,
+                        errorMessage = "No execution is currently paused waiting for clarification."
+                    ),
+                    trace = ExecutionTrace(
+                        executionId = response.executionId,
+                        skillId = "unknown",
+                        startTime = System.currentTimeMillis()
+                    ),
+                    diagnostics = emptyList(),
+                    stoppedStepId = null
+                )
+            }
+            if (response.executionId != state.request.executionId) {
+                return RuntimeReport(
+                    result = ExecutionResult(
+                        executionId = response.executionId,
+                        success = false,
+                        finalState = ExecutionState.FAILED,
+                        stepsCompleted = state.completedStepsCount,
+                        totalSteps = state.totalSteps,
+                        errorMessage = "Clarification response execution ID does not match active paused execution."
+                    ),
+                    trace = ExecutionTrace(
+                        executionId = response.executionId,
+                        skillId = state.request.skillId,
+                        startTime = System.currentTimeMillis()
+                    ),
+                    diagnostics = emptyList(),
+                    stoppedStepId = null
+                )
+            }
+            // Check staleness (5 minute timeout)
+            if (System.currentTimeMillis() - state.clarificationRequest.timestamp > 300_000L) {
+                activePausedState = null
+                return RuntimeReport(
+                    result = ExecutionResult(
+                        executionId = response.executionId,
+                        success = false,
+                        finalState = ExecutionState.FAILED,
+                        stepsCompleted = state.completedStepsCount,
+                        totalSteps = state.totalSteps,
+                        errorMessage = "Clarification request has expired."
+                    ),
+                    trace = ExecutionTrace(
+                        executionId = response.executionId,
+                        skillId = state.request.skillId,
+                        startTime = System.currentTimeMillis()
+                    ),
+                    diagnostics = emptyList(),
+                    stoppedStepId = null
+                )
+            }
+            running = true
+            activePausedState = null
+            state
+        }
+
+        val recorder = paused.recorder
+        val runGate = paused.runGate
+        val workflow = paused.workflow
+        val request = paused.request
+
+        // Security check: Never allow sensitive credentials in clarification
+        val providedVal = response.providedSlotValue
+        if (!providedVal.isNullOrBlank()) {
+            val lower = providedVal.lowercase()
+            if (listOf("password", "pin", "otp", "cvv", "passcode", "secret").any { lower.contains(it) }) {
+                runGate.block("Sensitive credentials provided in clarification. Automated execution terminated.")
+                return recorder.finish(
+                    state = ExecutionState.PAUSED_FOR_HANDOFF,
+                    completed = paused.completedStepsCount,
+                    total = paused.totalSteps,
+                    reason = "Sensitive credentials provided in clarification. Execution halted for security.",
+                    stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
+                ).also { lastReport = it }
+            }
+        }
+
+        // Apply provided slot value
+        if (!providedVal.isNullOrBlank() && paused.clarificationRequest.requiredSlot != null) {
+            paused.boundSlots[paused.clarificationRequest.requiredSlot!!] = providedVal
+        }
+
+        // Rebind steps with updated slots
+        val binding = SlotBinder.bind(workflow, paused.boundSlots)
+        if (binding.error != null) {
+            return recorder.finish(
+                state = ExecutionState.FAILED,
+                completed = paused.completedStepsCount,
+                total = paused.totalSteps,
+                reason = binding.error,
+                stoppedStep = null
+            ).also { lastReport = it }
+        }
+
+        // Re-observe live UI and revalidate SafetyGate before resuming
+        if (!driver.isReady()) {
+            return recorder.finish(
+                state = ExecutionState.FAILED,
+                completed = paused.completedStepsCount,
+                total = paused.totalSteps,
+                reason = "Accessibility service disconnected while waiting for clarification.",
+                stoppedStep = null
+            ).also { lastReport = it }
+        }
+
+        val currentUi = driver.observe()
+        if (currentUi == null) {
+            return recorder.finish(
+                state = ExecutionState.PAUSED_FOR_HANDOFF,
+                completed = paused.completedStepsCount,
+                total = paused.totalSteps,
+                reason = "No active inspectable window available upon resume.",
+                stoppedStep = null
+            ).also { lastReport = it }
+        }
+
+        try {
+            return executeSubtasks(
+                subtasks = paused.subtasks,
+                startSubtaskIndex = paused.pausedSubtaskIndex,
+                startStepIndex = paused.pausedStepIndex,
+                bindingSteps = binding.steps,
+                workflow = workflow,
+                request = request,
+                runGate = runGate,
+                recorder = recorder,
+                knownStates = paused.knownStates,
+                completedSubtaskIds = paused.completedSubtaskIds,
+                completedStepIds = paused.completedStepIds,
+                subtaskProgressList = paused.subtaskProgressList,
+                initialCompleted = paused.completedStepsCount,
+                total = binding.steps.size,
+                currentSlots = paused.boundSlots,
+                selectedCandidateIndex = response.selectedCandidateIndex
+            )
+        } catch (_: Exception) {
+            runGate.block("Runtime observation or execution failed upon resume.")
+            return recorder.finish(
+                state = if (cancelled) ExecutionState.ABORTED else ExecutionState.PAUSED_FOR_HANDOFF,
+                completed = paused.completedStepsCount,
+                total = paused.totalSteps,
+                reason = runGate.reason(),
+                stoppedStep = null
+            ).also { lastReport = it }
+        } finally {
+            synchronized(this) { running = false }
+        }
+    }
+
+    private suspend fun executeSubtasks(
+        subtasks: List<WorkflowSubtask>,
+        startSubtaskIndex: Int,
+        startStepIndex: Int,
+        bindingSteps: List<BoundStep>,
+        workflow: Workflow,
+        request: ExecutionRequest,
+        runGate: SafetyGate,
+        recorder: ExecutionTraceRecorder,
+        knownStates: MutableMap<String, String>,
+        completedSubtaskIds: MutableList<String>,
+        completedStepIds: MutableList<String>,
+        subtaskProgressList: MutableList<SubtaskProgress>,
+        initialCompleted: Int,
+        total: Int,
+        currentSlots: MutableMap<String, String>,
+        selectedCandidateIndex: Int? = null
+    ): RuntimeReport {
+        var completed = initialCompleted
+        var stepId: String? = null
+        var currentSubtaskId: String? = null
+
+        fun buildProgress(overallStatus: ProgressStatus, reason: String?): ExecutionProgress {
+            return ExecutionProgress(
+                schemaVersion = "1.0",
+                executionId = request.executionId,
+                currentSubtaskId = currentSubtaskId,
+                completedSubtaskIds = completedSubtaskIds.toList(),
+                currentStepId = stepId,
+                completedStepIds = completedStepIds.toList(),
+                subtasks = subtaskProgressList.toList(),
+                overallStatus = overallStatus,
+                pauseOrFailureReason = reason
+            )
+        }
+
+        fun finish(state: ExecutionState, reason: String?, clarReq: ClarificationRequest? = null): RuntimeReport {
+            val type = when (state) {
+                ExecutionState.COMPLETED -> DecisionType.PROCEED
+                ExecutionState.PAUSED_FOR_HANDOFF -> DecisionType.HANDOFF
+                ExecutionState.ABORTED -> DecisionType.ABORT
+                ExecutionState.WAITING_FOR_USER -> DecisionType.ASK_USER
+                else -> DecisionType.STOP
+            }
+            if (state == ExecutionState.PAUSED_FOR_HANDOFF) runGate.block(reason ?: "User handoff is required.")
+            recorder.decision(stepId, state, type, reason ?: "Every workflow step was verified.")
+            val overallProgStatus = when (state) {
+                ExecutionState.COMPLETED -> ProgressStatus.COMPLETED
+                ExecutionState.WAITING_FOR_USER -> ProgressStatus.WAITING_FOR_USER
+                ExecutionState.FAILED, ExecutionState.ABORTED, ExecutionState.PAUSED_FOR_HANDOFF -> ProgressStatus.FAILED
+                else -> ProgressStatus.ACTIVE
+            }
+            val progress = buildProgress(overallProgStatus, reason)
+            return recorder.finish(
+                state = state,
+                completed = completed,
+                total = total,
+                reason = reason,
+                stoppedStep = if (state == ExecutionState.COMPLETED) null else stepId,
+                progress = progress,
+                clarificationRequest = clarReq
+            ).also { lastReport = it }
+        }
+
+        fun blocked(): RuntimeReport? = when {
+            cancelled -> finish(ExecutionState.ABORTED, "Execution was cancelled by the user.")
+            runGate.reason() != null -> finish(ExecutionState.PAUSED_FOR_HANDOFF, runGate.reason())
+            else -> null
+        }
+
+        val stepMap = bindingSteps.associateBy { it.source.stepId }
+
+        for (stIndex in startSubtaskIndex until subtasks.size) {
+            val subtask = subtasks[stIndex]
+            currentSubtaskId = subtask.subtaskId
+
+            // DO NOT replay already completed subtasks
+            if (subtask.subtaskId in completedSubtaskIds) {
+                continue
+            }
+
+            val stepIdsInSubtask = subtask.stepIds
+            val stepsInSubtask = stepIdsInSubtask.flatMap { id ->
+                val exact = stepMap[id]
+                if (exact != null) listOf(exact)
+                else bindingSteps.filter { it.source.stepId.startsWith("${id}_") }
+            }
+
+            // Update subtask status to ACTIVE
+            val pIdx = subtaskProgressList.indexOfFirst { it.subtaskId == subtask.subtaskId }
+            if (pIdx >= 0) {
+                subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.ACTIVE)
+            }
+
+            val firstStepIdx = if (stIndex == startSubtaskIndex) startStepIndex else 0
+
+            for (sIndex in firstStepIdx until stepsInSubtask.size) {
+                val boundStep = stepsInSubtask[sIndex]
                 val step = boundStep.copy(stateEvidence = knownStates.toMap())
                 stepId = step.source.stepId
+
+                // DO NOT repeat already completed steps
+                if (step.source.stepId in completedStepIds) {
+                    continue
+                }
+
                 var verified = false
+
                 for (attempt in 0..recovery.retryLimit(step.source.recoveryPolicy)) {
                     blocked()?.let { return it }
                     if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service disconnected.")
@@ -107,28 +553,89 @@ class ExecutionEngine(
                         return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
                     }
                     verifier.startingStateError(step, before)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
-                    val match = matcher.match(step.selector, before, step.action)
-                    if (match.status == MatchStatus.AMBIGUOUS || match.status == MatchStatus.WEAK) {
-                        recorder.decision(stepId, ExecutionState.PAUSED_FOR_HANDOFF, DecisionType.ASK_USER, match.reason, match.best?.confidence ?: 0.0)
-                        return finish(ExecutionState.PAUSED_FOR_HANDOFF, match.reason)
+
+                    var match = matcher.match(step.selector, before, step.action)
+
+                    var effectiveStep = step
+                    val candidateList = listOfNotNull(match.best, match.second)
+
+                    // If resumed with a selected disambiguated candidate index
+                    if ((match.status == MatchStatus.AMBIGUOUS || match.status == MatchStatus.WEAK) &&
+                        selectedCandidateIndex != null && selectedCandidateIndex in candidateList.indices) {
+                        val chosen = candidateList[selectedCandidateIndex]
+                        val disambiguatedSelector = step.selector.copy(
+                            role = chosen.element.role,
+                            text = chosen.element.text ?: step.selector.text,
+                            resourceId = chosen.element.resourceId ?: step.selector.resourceId,
+                            contentDescription = chosen.element.contentDescription ?: step.selector.contentDescription
+                        )
+                        effectiveStep = step.copy(selector = disambiguatedSelector)
+                        match = matcher.match(disambiguatedSelector, before, step.action)
+                        if (match.status != MatchStatus.MATCHED) {
+                            match = com.chockXlate.teachablevoice.runtime.matching.MatchResult(
+                                status = MatchStatus.MATCHED,
+                                best = chosen,
+                                reason = "Target disambiguated by user clarification response."
+                            )
+                        }
                     }
+
+                    if (match.status == MatchStatus.AMBIGUOUS || match.status == MatchStatus.WEAK) {
+                        val candidates = candidateList.mapNotNull {
+                            val t = it.element.text ?: it.element.contentDescription ?: it.element.resourceId
+                            if (!t.isNullOrBlank()) "${it.element.role}: $t" else null
+                        }
+                        val clarReq = ClarificationRequest(
+                            schemaVersion = "1.0",
+                            executionId = request.executionId,
+                            reason = match.reason,
+                            question = "Multiple possible matches were found on screen. Which one do you want?",
+                            candidateDescriptions = candidates,
+                            pausedSubtaskId = subtask.subtaskId,
+                            pausedStepId = stepId
+                        )
+                        if (pIdx >= 0) {
+                            subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.WAITING_FOR_USER)
+                        }
+                        activePausedState = PausedExecutionState(
+                            request = request,
+                            workflow = workflow,
+                            boundSlots = currentSlots,
+                            subtasks = subtasks,
+                            pausedSubtaskIndex = stIndex,
+                            pausedStepIndex = sIndex,
+                            completedSubtaskIds = completedSubtaskIds,
+                            completedStepIds = completedStepIds,
+                            subtaskProgressList = subtaskProgressList,
+                            knownStates = knownStates,
+                            clarificationRequest = clarReq,
+                            runGate = runGate,
+                            recorder = recorder,
+                            totalSteps = total,
+                            completedStepsCount = completed
+                        )
+                        recorder.decision(stepId, ExecutionState.WAITING_FOR_USER, DecisionType.ASK_USER, match.reason, match.best?.confidence ?: 0.0)
+                        return finish(ExecutionState.WAITING_FOR_USER, match.reason, clarReq)
+                    }
+
                     var attempted = false
                     var failure = match.reason
+
                     if (match.status == MatchStatus.MATCHED) {
                         recorder.decision(stepId, ExecutionState.EXECUTING_STEP, DecisionType.EXECUTE, match.reason, match.best!!.confidence)
-                        val action = executor.execute(driver, step, before, workflow.appContext, workflow.safetyBoundary, runGate)
+                        val action = executor.execute(driver, effectiveStep, before, workflow.appContext, workflow.safetyBoundary, runGate)
                         attempted = action.attempted
                         failure = action.reason
                         if (attempted) {
-                            val actionId = recorder.action(step)
+                            val actionId = recorder.action(effectiveStep)
                             recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, action.reason)
-                            // Even a false performAction result requires re-observation; it is not proof of no effect.
-                            val verification = verifier.verify(driver, action.before ?: before, step, workflow.safetyBoundary, runGate)
+                            val verification = verifier.verify(driver, action.before ?: before, effectiveStep, workflow.safetyBoundary, runGate)
                             verification.after?.let { recorder.transition(actionId, action.before ?: before, it) }
                             blocked()?.let { return it }
                             if (action.accepted && verification.verified) {
                                 completed++
                                 verified = true
+                                completedStepIds.add(step.source.stepId)
                                 step.transition.toState?.let { label ->
                                     knownStates[label] = TransitionVerifier.fingerprint(verification.after!!)
                                 }
@@ -138,27 +645,56 @@ class ExecutionEngine(
                             failure = if (!action.accepted) action.reason else verification.reason
                         }
                     }
+
                     blocked()?.let { return it }
-                    val next = recovery.decide(step.source.recoveryPolicy, attempt, attempted)
+
+                    // Subtask-local recovery: If action was attempted, uncertain side effect prevents automatic retry
+                    val next = recovery.decideSubtaskRecovery(
+                        policy = step.source.recoveryPolicy,
+                        retries = attempt,
+                        actionAttempted = attempted,
+                        targetAbsentOrAmbiguous = (match.status != MatchStatus.MATCHED),
+                        isAmbiguousMatch = false,
+                        isNonSideEffecting = false,
+                        safetyBlocked = runGate.reason() != null
+                    )
+
                     when (next.action) {
-                        RecoveryAction.RETRY -> {
+                        RecoveryAction.RETRY, RecoveryAction.RERESOLVE_TARGET, RecoveryAction.RETRY_NON_SIDE_EFFECTING_STEP_IF_PROVEN_SAFE -> {
                             recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.RECOVER, next.reason)
                             driver.awaitChange(next.delayMs)
+                        }
+                        RecoveryAction.ASK_USER -> {
+                            return finish(ExecutionState.PAUSED_FOR_HANDOFF, "$failure ${next.reason}")
                         }
                         RecoveryAction.HANDOFF -> return finish(ExecutionState.PAUSED_FOR_HANDOFF, "$failure ${next.reason}")
                         RecoveryAction.ABORT -> return finish(ExecutionState.ABORTED, "$failure ${next.reason}")
                     }
                 }
-                if (!verified) return finish(ExecutionState.PAUSED_FOR_HANDOFF, "The bounded attempt budget was exhausted without verified completion.")
+
+                if (!verified) {
+                    if (pIdx >= 0) {
+                        subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(
+                            status = ProgressStatus.FAILED,
+                            failureReason = "The bounded attempt budget was exhausted without verified completion."
+                        )
+                    }
+                    return finish(ExecutionState.PAUSED_FOR_HANDOFF, "The bounded attempt budget was exhausted without verified completion.")
+                }
             }
-            blocked()?.let { return it }
-            return finish(ExecutionState.COMPLETED, null)
-        } catch (_: Exception) {
-            // Exception messages can contain user input. Do not propagate them into reports.
-            runGate.block("Runtime observation or execution failed. Completion cannot be established safely.")
-            return finish(if (cancelled) ExecutionState.ABORTED else ExecutionState.PAUSED_FOR_HANDOFF, runGate.reason())
-        } finally {
-            synchronized(this) { running = false }
+
+            // Subtask completed successfully
+            completedSubtaskIds.add(subtask.subtaskId)
+            if (pIdx >= 0) {
+                subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(
+                    status = ProgressStatus.COMPLETED,
+                    completedStepIds = stepIdsInSubtask,
+                    evidenceSummary = "Subtask '${subtask.label}' completed with verified transition evidence."
+                )
+            }
         }
+
+        blocked()?.let { return it }
+        return finish(ExecutionState.COMPLETED, null)
     }
 }

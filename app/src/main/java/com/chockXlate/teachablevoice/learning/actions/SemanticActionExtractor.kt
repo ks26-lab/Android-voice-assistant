@@ -14,7 +14,10 @@ object SemanticActionExtractor {
     /**
      * Extracts a list of SemanticActions from a DemonstrationTrace.
      */
-    fun extract(trace: DemonstrationTrace): List<SemanticAction> {
+    fun extract(
+        trace: DemonstrationTrace,
+        filterResult: com.chockXlate.teachablevoice.contract.filter.FilteredDemonstrationResult? = null
+    ): List<SemanticAction> {
         val semanticActions = mutableListOf<SemanticAction>()
 
         // Process Action events from the trace stream while preserving chronological order
@@ -40,6 +43,9 @@ object SemanticActionExtractor {
         }
 
         for (rawAction in sortedActions) {
+            if (filterResult != null && !filterResult.isTaskRelevant(rawAction.actionId)) {
+                continue
+            }
             val semanticAction = classifyAndExtract(rawAction, trace.appContext)
             semanticActions.add(semanticAction)
         }

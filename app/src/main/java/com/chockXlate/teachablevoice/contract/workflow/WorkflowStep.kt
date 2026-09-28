@@ -13,5 +13,6 @@ data class WorkflowStep(
     val expectedTransition: ExpectedTransition = ExpectedTransition(),
     val recoveryPolicy: RecoveryPolicy = RecoveryPolicy(),
     val confidence: Double = 1.0,
-    val provenance: String = "demonstration"
+    val provenance: String = "demonstration",
+    val provenanceLink: com.chockXlate.teachablevoice.contract.provenance.StepProvenanceLink? = null
 )

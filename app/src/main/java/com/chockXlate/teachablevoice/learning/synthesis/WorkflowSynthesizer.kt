@@ -428,15 +428,34 @@ object WorkflowSynthesizer {
         val hashBytes = java.security.MessageDigest.getInstance("SHA-256").digest(rawSeed.toByteArray(Charsets.UTF_8))
         val skillHash = hashBytes.take(4).joinToString("") { "%02x".format(it) }
 
+        val parameterizedSteps = QuantityPattern.parameterize(workflowSteps, semanticActions, trace, workflowSlots)
+        val filterResult = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(trace)
+        val generatedSkillId = "skill_${intentName}_$skillHash"
+        val provGraph = com.chockXlate.teachablevoice.learning.provenance.DemonstrationProvenanceBuilder.build(
+            workflowSkillId = generatedSkillId,
+            trace = trace,
+            steps = parameterizedSteps,
+            semanticActions = semanticActions,
+            inferenceResult = inferenceResult,
+            filterResult = filterResult
+        )
+        val stepsWithProv = parameterizedSteps.map { step ->
+            val link = provGraph.findStepProvenance(step.stepId)
+            if (link != null) step.copy(provenanceLink = link) else step
+        }
+        val subtasks = com.chockXlate.teachablevoice.learning.subtask.WorkflowSubtaskSegmenter.segment(stepsWithProv)
+
         val workflow = Workflow(
             schemaVersion = "1.0",
-            skillId = "skill_${intentName}_$skillHash",
+            skillId = generatedSkillId,
             name = "Workflow for $intentName",
             intent = intentName,
             appContext = trace.appContext.ifBlank { "com.teachablevoice.app" },
             slots = workflowSlots.sortedBy { it.name },
-            steps = QuantityPattern.parameterize(workflowSteps, semanticActions, trace, workflowSlots),
-            safetyBoundary = safetyBoundary
+            steps = stepsWithProv,
+            safetyBoundary = safetyBoundary,
+            subtasks = subtasks,
+            provenanceGraph = provGraph
         )
 
         val compatibility = com.chockXlate.teachablevoice.skill.validation.ReplayAdmission.problems(workflow) +
