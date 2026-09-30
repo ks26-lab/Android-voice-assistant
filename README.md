@@ -1,60 +1,445 @@
-# One-Shot Semantic Workflow Learning for Android
+# Teachable Voice Automation
+## One-Shot Semantic Workflow Learning for Android
 
-Samsung PRISM Gen AI Hackathon 3.0 prototype: teach an Android interaction once, inspect the learned semantic workflow, then replay it with a new command and changed values. The workflow is learned from Accessibility evidence; the executor has no application-specific scripts.
+**Samsung PRISM Gen AI Hackathon 3.0 — Theme 3: Real-Time Agents**
 
-**Current scope:** deterministic semantic extraction and a limited English command grammar, not an LLM or unrestricted natural-language understanding. One demonstration cannot establish which values vary: the save dialog asks the teacher to explicitly select variable slots. Unsupported meaning, ambiguous controls, inaccessible screens, and sensitive boundaries stop automation.
+Teachable Voice Automation is an Android-native assistant that learns a reusable workflow from a single UI demonstration. Instead of replaying screen coordinates or relying on app-specific APIs, it captures Android Accessibility evidence, filters navigation/system noise, extracts semantic actions, infers intent and variable slots, synthesizes an inspectable Workflow IR, and passes learned skills to a deterministic runtime with state verification and safety boundaries.
 
-## Production path
+> **Core idea:** Teach the assistant a workflow once, then invoke the learned workflow using a new or paraphrased command with changed values.
 
-Voice/typed description + real taps → DemonstrationTrace → normalization → semantic actions/intent/slots → single-demonstration review → Workflow → validation → shared in-memory SkillRepository → new command → matching → ExecutionRequest → deterministic ExecutionEngine → fresh Accessibility tree → safety gate → action → re-observation/verification → result and trace.
+## Drive Link
+https://drive.google.com/drive/folders/1Xdtom1lW-tKq9wqBhIA_BtVk9r3PjxEG?usp=sharing
 
-Person 1 owns learning through ExecutionRequest. Person 2 owns resolution, binding, execution, verification, recovery and reporting. Shared contracts contain no Android node objects. [Architecture](docs/ARCHITECTURE.md) explains the actual wiring.
+## Key Features
 
-## Why semantic execution
+- One-shot workflow learning from Android UI demonstrations
+- Android Accessibility-based observation and execution
+- Semantic action extraction instead of coordinate recording
+- Demonstration filtering for launcher, recents, own-app, and transition noise
+- Per-action package provenance
+- Intent and canonical slot inference
+- Parameterized Workflow IR such as `${item}`
+- Inspectable Skill Store
+- Changed-slot and paraphrased command understanding
+- Semantic UI target matching
+- Evidence-based transition verification
+- Bounded recovery and explicit user handoff
+- Credential/payment safety boundaries
+- No coordinate replay
+- Execution traces and outcome reporting
+- Fail-closed handling of unknown, ambiguous, unsafe, or unverifiable situations
 
-Selectors contain naturally observed labels, descriptions, resource IDs and hierarchy context. They do not replay tap coordinates. The runtime rejects ambiguous candidates and reacquires live nodes for every action. Android accepting an action is not success: each step must produce observable transition evidence. A changed UI is weaker evidence than an explicit expected control, and the report identifies that distinction.
+## Example
 
-## Safety
+Teaching command:
 
-A deterministic gate checks workflow restrictions, password metadata and visible credential/payment semantics immediately before dispatch and during verification. Handoff/cancellation latches the engine; later requests cannot act until explicit reset and fresh validation. Activity recreation does not reset the latch. Payments and credentials require manual control; reset does not grant an exemption.
-
-Teaching capture refuses recognized credential screens before reading editable values. Credential-related utterances are discarded/redacted. Runtime traces omit input/UI text. Detection depends on accessible metadata and a finite vocabulary; do not teach secrets. Unknown language/content is not certified safe.
-
-## Build and setup
-
-Requirements: JDK 17, Android SDK platform 34, Android SDK build tools, Android device/emulator API 26+, USB debugging for adb. Gradle wrapper downloads Gradle 8.5 and Maven dependencies on first use. No backend, API key, database or signing secret is needed.
-
-```sh
-export JAVA_HOME=/path/to/jdk-17
-export ANDROID_HOME=/path/to/Android/sdk
-export PATH="$ANDROID_HOME/platform-tools:$PATH"
-./gradlew clean :app:compileDebugKotlin --console=plain
-./gradlew :app:testDebugUnitTest --console=plain
-python3 tools/test_person2.py
-./gradlew assembleDebug --console=plain
-adb devices
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -W -n com.chockXlate.teachablevoice/.app.TeachingDemoActivity
+```text
+Search for headphones
 ```
 
-Alternatively set `sdk.dir` in your own ignored `local.properties`. The focused Python harness uses dependencies populated by Gradle and SDK 34; it is not a replacement for the full build. `assembleRelease` produces an **unsigned** release APK; distribution signing is outside this repository.
+Learned representation:
 
-Enable **Settings → Accessibility → downloaded apps → Teachable Voice Automation** manually. The app also has an Accessibility Settings button. Grant microphone permission when pressing **MIC / STOP**. Speech uses the installed Android SpeechRecognizer; offline recognition is preferred, but provider availability/language/network behavior is device-dependent. Typed recording remains available.
+```text
+Intent: search_information
 
-## Teach and replay
+Slot:
+  item
+  Type: TEXT
+  Role: VARIABLE
+  Reference: ${item}
 
-1. Enter a skill name and task description. Start teaching, then speak with MIC / STOP or type a transcript and press RECORD TYPED.
-2. Switch directly to the target app using Recents. Perform a short, harmless, accessible workflow. The first external interaction establishes the teaching package; cross-app teaching is not supported.
-3. Return and STOP TEACHING. Inspect normalization/actions if useful, then VALIDATE & STORE. Select only values you intend future commands to supply; unchecked values are fixed. No synthetic demonstration or sample skill is inserted.
-4. Return the target app to its learned initial screen. In this app, enter the new command, then EXECUTE RUNTIME. Switch to the target app within the five-second countdown.
-5. Return to inspect LAST RUN. It shows execution/skill IDs, completed steps, stopped step, state, reason, confidence and duration. After handoff, resolve the issue manually and explicitly RESET before submitting a new command.
+Procedure:
+  INPUT_TEXT
+  Target: semantic EditText
+  Parameter: ${item}
+```
 
-The command grammar supports selected ordering phrases and `search [for] …`, `find …`, `look up …`. Other canonical intents exist but do not all have complete slot extraction. Arbitrary custom intents/paraphrases are **not** guaranteed. Missing required values remain missing; unknown skills require teaching. Similar skills may require clarification.
+A later command:
 
-## Validation and limits
+```text
+Search for phone case
+```
 
-See [evaluation evidence](docs/EVALUATION.md), [five-minute demo](docs/DEMO.md), [judge questions](docs/JUDGE_QA.md), and [runtime details](docs/PERSON2_RUNTIME.md).
+can bind:
 
-The store and last result live only in the app process. Historical workflow versions cannot be retrieved by the frozen repository interface. Scroll execution requires an explicit direction; teaching does not infer it. Popup dismissal/back navigation require manual intervention. Non-accessible canvases and multilingual commands are not supported generically. Main-thread node traversal is bounded, and polling uses nonblocking delays.
+```text
+item = "phone case"
+```
 
-Do not version `local.properties`, `.gradle/`, `.idea/`, `**/build/`, APKs or `compile-errors.txt`. Keep the wrapper scripts/JAR/properties and source resources in the repository.
+to the same learned workflow rather than storing another hard-coded recording.
+
+## Architecture
+
+```text
+Voice / Typed Task + Android Accessibility Events
+                       |
+                       v
+              Demonstration Capture
+                       |
+                       v
+               DemonstrationTrace
+                       |
+                       v
+          Normalization + Noise Filtering
+                       |
+                       v
+        Semantic Action / Target Extraction
+                       |
+                       v
+             Intent + Slot Inference
+                       |
+                       v
+          Constant / Variable Alignment
+                       |
+                       v
+         Workflow Synthesis + Validation
+                       |
+                       v
+                 Workflow IR
+                       |
+                       v
+                  Skill Store
+                       |
+                 New Command
+                       |
+                       v
+        Command Understanding + Matching
+                       |
+                       v
+              ExecutionRequest
+                       |
+                       v
+      Slot Binding + Current UI Observation
+                       |
+                       v
+       Semantic Target / State Matching
+                       |
+                       v
+          Confidence + Safety Gates
+                       |
+                       v
+      Deterministic Accessibility Executor
+                       |
+                       v
+             Transition Verification
+                       |
+          Verified / Recover / Ask /
+              Handoff / Safe Stop
+                       |
+                       v
+        ExecutionTrace + ExecutionResult
+```
+
+The architecture separates **semantic learning/reasoning** from **deterministic execution**. Learned meaning determines what should happen; runtime state verification and safety policy determine whether an action is allowed to happen.
+
+## Teaching Workflow
+
+1. Enter a skill name and task description.
+2. Tap **START TEACHING**.
+3. Switch to another Android app and demonstrate the workflow.
+4. Return and tap **STOP TEACHING**.
+5. Normalize the captured trace.
+6. Extract semantic actions.
+7. Infer intent and slots.
+8. Synthesize and validate Workflow IR.
+9. Confirm variable values.
+10. Store and inspect the learned skill.
+
+## Replay Workflow
+
+1. Provide a new voice or typed command.
+2. Interpret it into canonical intent and slots.
+3. Match it against learned skills.
+4. Reject unknown or ambiguous matches instead of guessing.
+5. Build an `ExecutionRequest`.
+6. Bind new slot values.
+7. Observe the current Android UI.
+8. Verify app/state preconditions.
+9. Resolve targets semantically.
+10. Pass actions through the safety policy.
+11. Execute via Android Accessibility.
+12. Re-observe and verify transitions.
+13. Recover, clarify, hand off, or stop when evidence is insufficient.
+14. Produce an inspectable execution result and trace.
+
+## Safety Model
+
+Safety is enforced below semantic planning.
+
+The runtime is designed to:
+- block credential/password/PIN/OTP-sensitive automation;
+- stop or hand control to the user at protected boundaries;
+- avoid storing protected text;
+- prevent continued automated actions while a hard safety boundary is active;
+- reject ambiguous skill matches;
+- reject unsupported or unbindable variables;
+- pause when target application/state evidence cannot be verified;
+- avoid blind coordinate-based replay.
+
+**Design principle: maximum reliable autonomy, not maximum autonomy.**
+
+## Requirements
+
+Recommended environment:
+- Android Studio
+- Android SDK / Platform Tools (`adb`)
+- Compatible JDK
+- Android physical device or emulator
+- Accessibility Service support
+- USB debugging for physical-device development
+- Python 3 for the Person-2 test harness
+
+The included Gradle wrapper is used, so a separate Gradle installation is not required.
+
+## Clone and Build
+
+```bash
+git clone https://github.com/umika27/Android-voice-assistant.git
+cd Android-voice-assistant
+./gradlew clean :app:assembleDebug
+```
+
+Debug APK:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+Install:
+
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+or:
+
+```bash
+./gradlew installDebug
+```
+
+## Accessibility Setup
+
+After installation:
+
+1. Open Android **Settings**.
+2. Navigate to **Accessibility**.
+3. Find **Teachable Voice Automation**.
+4. Enable its Accessibility Service.
+5. Return to the application.
+
+Android may require Accessibility to be re-enabled after application data is cleared.
+
+## Reproducible Demo
+
+1. Launch Teachable Voice Automation.
+2. Enter:
+
+```text
+Skill name: Search
+Task description: Search for headphones
+```
+
+3. Tap **START TEACHING**.
+4. Switch to a supported Android search UI.
+5. Focus the search field and enter `headphones`.
+6. Return to Teachable Voice Automation.
+7. Tap **STOP TEACHING**.
+8. Normalize the trace.
+9. Extract semantic actions.
+10. Validate and store the skill.
+11. Mark `item` as the variable when prompted.
+12. Inspect the stored skill.
+
+Expected learned representation includes:
+
+```text
+Intent: search_information
+Slot: item
+Type: TEXT
+Role: VARIABLE
+Reference: ${item}
+Validation: VALID
+Stored: STORED
+Coordinate Replay: NO
+Credential automation: BLOCKED
+```
+
+Then provide:
+
+```text
+Search for phone case
+```
+
+The command-understanding pipeline should derive:
+
+```text
+intent = search_information
+item = phone case
+```
+
+If the target application or required semantic starting state cannot be verified, runtime may request explicit user handoff instead of blindly replaying an action.
+
+## Tests
+
+Android unit tests:
+
+```bash
+./gradlew testDebugUnitTest --console=plain
+```
+
+Person-2/runtime harness:
+
+```bash
+python3 tools/test_person2.py
+```
+
+APK build:
+
+```bash
+./gradlew :app:assembleDebug --console=plain
+```
+
+Regression coverage includes teaching capture, external-app package provenance, navigation/system noise filtering, semantic action extraction, canonical intent/slot alignment, workflow synthesis, replay admission, command parsing, slot binding, state evidence, transition verification, ambiguity handling, runtime safety, and handoff behavior.
+
+## Important Design Constraints
+
+The implementation intentionally avoids:
+- hard-coded screen coordinates;
+- pre-baked benchmark workflows;
+- app-specific SDK automation;
+- deep-link shortcuts as a substitute for learned execution;
+- web fallbacks as a substitute for Android interaction;
+- blind screenshot-to-LLM-to-tap loops;
+- credential/payment automation;
+- silently choosing between ambiguous learned skills.
+
+UI bounds may exist as runtime observations, but are not treated as learned workflow identity.
+
+## Project Structure
+
+```text
+app/src/main/java/com/chockXlate/teachablevoice/
+
+├── app/          # Application/demo UI
+├── command/      # Command interpretation and request creation
+├── contract/     # Shared contracts / Workflow IR
+├── learning/     # Intent, slots, synthesis, provenance
+├── runtime/      # Binding, execution, recovery, verification
+├── safety/       # Runtime safety policy/gates
+├── skill/        # Skill validation/repository
+└── teach/        # Demonstration capture/filtering
+```
+
+## Core Contracts
+
+Important contracts include:
+- `DemonstrationTrace`
+- `UiState`
+- `UiElement`
+- `Workflow`
+- `WorkflowStep`
+- `WorkflowSubtask`
+- `SemanticSelector`
+- `ExpectedTransition`
+- `SafetyBoundary`
+- `ExecutionRequest`
+- `ExecutionDecision`
+- `ExecutionState`
+- `ExecutionProgress`
+- `ExecutionTrace`
+- `ExecutionResult`
+
+These form the boundary between learning and deterministic execution.
+
+## Failure Handling
+
+Failure is a valid runtime outcome. The system may:
+
+```text
+EXECUTE
+RECOVER
+ASK_USER
+HANDOFF
+STOP
+```
+
+instead of fabricating missing values or blindly continuing.
+
+Examples:
+- target application is not foreground;
+- semantic starting-state evidence does not match;
+- UI target confidence is insufficient;
+- required slot is missing;
+- multiple compatible skills exist;
+- transition outcome cannot be verified;
+- a credential/payment boundary is encountered.
+
+## Current Prototype Limitations
+
+This is a hackathon research prototype, not a production Android assistant.
+
+- Accessibility quality varies across third-party apps and custom views.
+- Dynamic/custom screens may expose insufficient stable semantic evidence.
+- Replay can require explicit user handoff to establish the correct foreground app/state.
+- Speech recognition depends on Android speech-recognition availability; typed command input is available as a fallback.
+- Learned skills currently operate within supported canonical intent/slot grammar.
+- Runtime intentionally refuses execution when confidence, state evidence, ambiguity, or safety policy prevents reliable automation.
+
+## Docker
+
+**Docker is not required for this Android-native prototype.** The APK is built directly with the included Gradle project. There is no separate server component required to reproduce the demonstrated Android workflow-learning pipeline.
+
+## Reproducibility Summary
+
+For evaluation:
+
+1. Clone the repository.
+2. Build with the included Gradle wrapper.
+3. Install the APK.
+4. Enable the Accessibility Service.
+5. Teach a workflow.
+6. Inspect the generated Workflow IR.
+7. Submit a changed/paraphrased command.
+8. Inspect runtime decisions and the execution trace.
+
+## Hackathon Submission
+
+**Samsung PRISM Gen AI Hackathon 3.0 — Theme 3: Real-Time Agents**
+
+Project: **Teachable Voice Automation — One-Shot Semantic Workflow Learning for Android**
+
+The final judged commit must be tagged exactly:
+
+```text
+PRISM_GENAI_HACKATHON_Y2026
+```
+
+All artifacts referenced by the final submission should be present in that tagged commit as required by the hackathon instructions.
+
+## Final Release Checklist
+
+- [ ] Source code pushed
+- [ ] Clean-clone build verified
+- [ ] Accessibility setup documented
+- [ ] Unit tests pass
+- [ ] Person-2 runtime harness passes
+- [ ] APK verified
+- [ ] README included
+- [ ] PPT/PDF included
+- [ ] Demo video included or referenced as required
+- [ ] Documentation included
+- [ ] No credentials/secrets committed
+- [ ] Final commit reviewed
+- [ ] Final commit tagged `PRISM_GENAI_HACKATHON_Y2026`
+-  Tag pushed
+
+After all final artifacts are committed:
+
+```bash
+git tag PRISM_GENAI_HACKATHON_Y2026
+git push origin PRISM_GENAI_HACKATHON_Y2026
+```
+
+## Disclaimer
+
+This prototype uses Android Accessibility capabilities for user-authorized workflow learning and execution. It is intended for hackathon/research demonstration purposes. Sensitive credential and payment interactions are deliberately outside the automated execution boundary.
