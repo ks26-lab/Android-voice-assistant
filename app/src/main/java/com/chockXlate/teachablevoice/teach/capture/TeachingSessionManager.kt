@@ -40,7 +40,7 @@ object TeachingSessionManager {
     }
 
     fun recordUiState(state: UiState) {
-        val session = currentSession.get() as? TeachingSessionImpl
+        val session = currentSession.get()
         if (session?.isRecording == true) {
             session.recordUiState(state)
         }
@@ -55,7 +55,7 @@ object TeachingSessionManager {
     }
 
     fun peekSessionTrace(): DemonstrationTrace? {
-        val session = currentSession.get() as? TeachingSessionImpl
+        val session = currentSession.get()
         return if (session?.isRecording == true) session.peekTrace() else null
     }
 

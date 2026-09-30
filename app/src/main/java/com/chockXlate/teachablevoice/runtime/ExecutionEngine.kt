@@ -25,7 +25,10 @@ class ExecutionEngine(
     private val driver: UiDriver,
     private val matcher: SemanticMatcher = SemanticMatcher(),
     private val verifier: TransitionVerifier = TransitionVerifier(matcher),
-    private val recovery: RecoveryController = RecoveryController()
+    private val recovery: RecoveryController = RecoveryController(),
+    private val maxPackageWaitMs: Long = 20_000L,
+    private val packagePollIntervalMs: Long = 250L,
+    private val maxPackageWaitAttempts: Int = 80
 ) {
     private val resolver = WorkflowResolver(repository)
     private val preconditions = PreconditionEvaluator(matcher)
@@ -47,14 +50,19 @@ class ExecutionEngine(
         val completedStepIds: MutableList<String>,
         val subtaskProgressList: MutableList<SubtaskProgress>,
         val knownStates: MutableMap<String, String>,
-        var clarificationRequest: ClarificationRequest,
+        var clarificationRequest: ClarificationRequest?,
         val runGate: SafetyGate,
         val recorder: ExecutionTraceRecorder,
         val totalSteps: Int,
-        var completedStepsCount: Int
+        var completedStepsCount: Int,
+        val expectedPackage: String? = null
     )
 
     @Volatile private var activePausedState: PausedExecutionState? = null
+
+    val isPaused: Boolean get() = activePausedState != null
+    val pausedExecutionId: String? get() = activePausedState?.request?.executionId
+    val pausedExpectedPackage: String? get() = activePausedState?.expectedPackage
 
     @Synchronized fun cancel() {
         cancelled = true
@@ -75,7 +83,14 @@ class ExecutionEngine(
     suspend fun execute(request: ExecutionRequest): RuntimeReport {
         val recorder = ExecutionTraceRecorder(request)
         val runGate = synchronized(this) {
-            if (running) null else { running = true; gate }
+            if (running) null else {
+                val r = gate.reason()
+                if (r != null && !isPermanentSafetyBlock(r)) {
+                    gate = SafetyGate()
+                }
+                running = true
+                gate
+            }
         } ?: return recorder.finish(
             state = ExecutionState.FAILED,
             completed = 0,
@@ -224,7 +239,8 @@ class ExecutionEngine(
                     runGate = runGate,
                     recorder = recorder,
                     totalSteps = workflow.steps.size,
-                    completedStepsCount = 0
+                    completedStepsCount = 0,
+                    expectedPackage = workflow.steps.firstOrNull()?.preconditions?.requiredPackage ?: workflow.appContext
                 )
                 return finish(ExecutionState.WAITING_FOR_USER, clarReq.reason, clarReq)
             }
@@ -275,21 +291,31 @@ class ExecutionEngine(
         }
     }
 
+    suspend fun resume(executionId: String? = null): RuntimeReport {
+        return resumeInternal(executionId = executionId, response = null)
+    }
+
     suspend fun resume(response: ClarificationResponse): RuntimeReport {
+        return resumeInternal(executionId = response.executionId, response = response)
+    }
+
+    private suspend fun resumeInternal(executionId: String?, response: ClarificationResponse?): RuntimeReport {
         val paused = synchronized(this) {
             val state = activePausedState
             if (state == null) {
+                val err = if (response != null) "No execution is currently paused waiting for clarification."
+                else "No execution is currently paused waiting for resume."
                 return RuntimeReport(
                     result = ExecutionResult(
-                        executionId = response.executionId,
+                        executionId = executionId ?: "unknown",
                         success = false,
                         finalState = ExecutionState.FAILED,
                         stepsCompleted = 0,
                         totalSteps = 0,
-                        errorMessage = "No execution is currently paused waiting for clarification."
+                        errorMessage = err
                     ),
                     trace = ExecutionTrace(
-                        executionId = response.executionId,
+                        executionId = executionId ?: "unknown",
                         skillId = "unknown",
                         startTime = System.currentTimeMillis()
                     ),
@@ -297,18 +323,20 @@ class ExecutionEngine(
                     stoppedStepId = null
                 )
             }
-            if (response.executionId != state.request.executionId) {
+            if (executionId != null && executionId != state.request.executionId) {
+                val err = if (response != null) "Clarification response execution ID does not match active paused execution."
+                else "Execution ID does not match active paused execution."
                 return RuntimeReport(
                     result = ExecutionResult(
-                        executionId = response.executionId,
+                        executionId = executionId,
                         success = false,
                         finalState = ExecutionState.FAILED,
                         stepsCompleted = state.completedStepsCount,
                         totalSteps = state.totalSteps,
-                        errorMessage = "Clarification response execution ID does not match active paused execution."
+                        errorMessage = err
                     ),
                     trace = ExecutionTrace(
-                        executionId = response.executionId,
+                        executionId = executionId,
                         skillId = state.request.skillId,
                         startTime = System.currentTimeMillis()
                     ),
@@ -317,11 +345,11 @@ class ExecutionEngine(
                 )
             }
             // Check staleness (5 minute timeout)
-            if (System.currentTimeMillis() - state.clarificationRequest.timestamp > 300_000L) {
+            if (state.clarificationRequest != null && System.currentTimeMillis() - state.clarificationRequest!!.timestamp > 300_000L) {
                 activePausedState = null
                 return RuntimeReport(
                     result = ExecutionResult(
-                        executionId = response.executionId,
+                        executionId = executionId ?: state.request.executionId,
                         success = false,
                         finalState = ExecutionState.FAILED,
                         stepsCompleted = state.completedStepsCount,
@@ -329,7 +357,7 @@ class ExecutionEngine(
                         errorMessage = "Clarification request has expired."
                     ),
                     trace = ExecutionTrace(
-                        executionId = response.executionId,
+                        executionId = executionId ?: state.request.executionId,
                         skillId = state.request.skillId,
                         startTime = System.currentTimeMillis()
                     ),
@@ -343,29 +371,31 @@ class ExecutionEngine(
         }
 
         val recorder = paused.recorder
-        val runGate = paused.runGate
+        val runGate = if (paused.runGate.reason()?.let { isPermanentSafetyBlock(it) } != true) SafetyGate() else paused.runGate
         val workflow = paused.workflow
         val request = paused.request
 
-        // Security check: Never allow sensitive credentials in clarification
-        val providedVal = response.providedSlotValue
-        if (!providedVal.isNullOrBlank()) {
-            val lower = providedVal.lowercase()
-            if (listOf("password", "pin", "otp", "cvv", "passcode", "secret").any { lower.contains(it) }) {
-                runGate.block("Sensitive credentials provided in clarification. Automated execution terminated.")
-                return recorder.finish(
-                    state = ExecutionState.PAUSED_FOR_HANDOFF,
-                    completed = paused.completedStepsCount,
-                    total = paused.totalSteps,
-                    reason = "Sensitive credentials provided in clarification. Execution halted for security.",
-                    stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
-                ).also { lastReport = it }
+        if (response != null) {
+            // Security check: Never allow sensitive credentials in clarification
+            val providedVal = response.providedSlotValue
+            if (!providedVal.isNullOrBlank()) {
+                val lower = providedVal.lowercase()
+                if (listOf("password", "pin", "otp", "cvv", "passcode", "secret").any { lower.contains(it) }) {
+                    runGate.block("Sensitive credentials provided in clarification. Automated execution terminated.")
+                    return recorder.finish(
+                        state = ExecutionState.PAUSED_FOR_HANDOFF,
+                        completed = paused.completedStepsCount,
+                        total = paused.totalSteps,
+                        reason = "Sensitive credentials provided in clarification. Execution halted for security.",
+                        stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
+                    ).also { lastReport = it }
+                }
             }
-        }
 
-        // Apply provided slot value
-        if (!providedVal.isNullOrBlank() && paused.clarificationRequest.requiredSlot != null) {
-            paused.boundSlots[paused.clarificationRequest.requiredSlot!!] = providedVal
+            // Apply provided slot value
+            if (!providedVal.isNullOrBlank() && paused.clarificationRequest?.requiredSlot != null) {
+                paused.boundSlots[paused.clarificationRequest!!.requiredSlot!!] = providedVal
+            }
         }
 
         // Rebind steps with updated slots
@@ -386,19 +416,32 @@ class ExecutionEngine(
                 state = ExecutionState.FAILED,
                 completed = paused.completedStepsCount,
                 total = paused.totalSteps,
-                reason = "Accessibility service disconnected while waiting for clarification.",
+                reason = if (response != null) "Accessibility service disconnected while waiting for clarification."
+                else "Accessibility service disconnected while waiting to resume.",
                 stoppedStep = null
             ).also { lastReport = it }
         }
 
         val currentUi = driver.observe()
         if (currentUi == null) {
+            synchronized(this) { activePausedState = paused; running = false }
             return recorder.finish(
                 state = ExecutionState.PAUSED_FOR_HANDOFF,
                 completed = paused.completedStepsCount,
                 total = paused.totalSteps,
                 reason = "No active inspectable window available upon resume.",
                 stoppedStep = null
+            ).also { lastReport = it }
+        }
+
+        if (paused.expectedPackage != null && (currentUi.state.appContext != paused.expectedPackage || isOwnApp(currentUi.state.appContext))) {
+            synchronized(this) { activePausedState = paused; running = false }
+            return recorder.finish(
+                state = ExecutionState.PAUSED_FOR_HANDOFF,
+                completed = paused.completedStepsCount,
+                total = paused.totalSteps,
+                reason = "The required app is not the active app. Open it before continuing.",
+                stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
             ).also { lastReport = it }
         }
 
@@ -419,7 +462,7 @@ class ExecutionEngine(
                 initialCompleted = paused.completedStepsCount,
                 total = binding.steps.size,
                 currentSlots = paused.boundSlots,
-                selectedCandidateIndex = response.selectedCandidateIndex
+                selectedCandidateIndex = response?.selectedCandidateIndex
             )
         } catch (_: Exception) {
             runGate.block("Runtime observation or execution failed upon resume.")
@@ -546,8 +589,86 @@ class ExecutionEngine(
                 for (attempt in 0..recovery.retryLimit(step.source.recoveryPolicy)) {
                     blocked()?.let { return it }
                     if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service disconnected.")
-                    recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.PROCEED, "Observing current UI and checking preconditions.")
-                    val before = driver.observe() ?: return finish(ExecutionState.PAUSED_FOR_HANDOFF, "No inspectable active window is available.")
+                    val expectedPackage = step.preconditions.requiredPackage
+                        ?.takeIf { it.isNotBlank() && it != "unknown" && !isOwnApp(it) && !isSystemSurface(it) }
+                        ?: workflow.appContext.takeIf { it.isNotBlank() && it != "unknown" && !isOwnApp(it) && !isSystemSurface(it) }
+                        ?: step.preconditions.requiredPackage
+                        ?: workflow.appContext
+
+                    var before = driver.observe()
+
+                    val isTargetForeground = before != null &&
+                        before.state.appContext == expectedPackage &&
+                        !isOwnApp(before.state.appContext)
+
+                    if (!isTargetForeground) {
+                        recorder.decision(
+                            stepId,
+                            ExecutionState.WAITING_FOR_USER,
+                            DecisionType.ASK_USER,
+                            "The required app is not the active app. Open it before continuing."
+                        )
+                        if (pIdx >= 0) {
+                            subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.WAITING_FOR_USER)
+                        }
+
+                        activePausedState = PausedExecutionState(
+                            request = request,
+                            workflow = workflow,
+                            boundSlots = currentSlots,
+                            subtasks = subtasks,
+                            pausedSubtaskIndex = stIndex,
+                            pausedStepIndex = sIndex,
+                            completedSubtaskIds = completedSubtaskIds,
+                            completedStepIds = completedStepIds,
+                            subtaskProgressList = subtaskProgressList,
+                            knownStates = knownStates,
+                            clarificationRequest = null,
+                            runGate = runGate,
+                            recorder = recorder,
+                            totalSteps = total,
+                            completedStepsCount = completed,
+                            expectedPackage = expectedPackage
+                        )
+
+                        val waitStart = System.currentTimeMillis()
+                        var waitAttempts = 0
+                        var targetActive = false
+
+                        while (waitAttempts < maxPackageWaitAttempts && (System.currentTimeMillis() - waitStart) <= maxPackageWaitMs) {
+                            blocked()?.let { return it }
+                            if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service disconnected.")
+                            waitAttempts++
+                            driver.awaitChange(packagePollIntervalMs)
+                            blocked()?.let { return it }
+                            val nextObs = driver.observe()
+                            if (nextObs != null && nextObs.state.appContext == expectedPackage && !isOwnApp(nextObs.state.appContext)) {
+                                before = nextObs
+                                targetActive = true
+                                break
+                            }
+                        }
+
+                        if (!targetActive) {
+                            val failureReason = if (before == null) "No inspectable active window is available."
+                            else "The required app is not the active app. Open it before continuing."
+                            return finish(ExecutionState.PAUSED_FOR_HANDOFF, failureReason)
+                        }
+
+                        activePausedState = null
+                        if (pIdx >= 0) {
+                            subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.ACTIVE)
+                        }
+                    }
+
+                    recorder.decision(
+                        stepId,
+                        ExecutionState.MATCHING_STATE,
+                        DecisionType.PROCEED,
+                        "Observing current UI and checking preconditions."
+                    )
+
+                    if (before == null) return finish(ExecutionState.PAUSED_FOR_HANDOFF, "No inspectable active window is available.")
                     runGate.check(workflow.safetyBoundary, before, step)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
                     preconditions.evaluate(step.preconditions, before, workflow.appContext, step.stateEvidence)?.let {
                         return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
@@ -612,7 +733,8 @@ class ExecutionEngine(
                             runGate = runGate,
                             recorder = recorder,
                             totalSteps = total,
-                            completedStepsCount = completed
+                            completedStepsCount = completed,
+                            expectedPackage = expectedPackage
                         )
                         recorder.decision(stepId, ExecutionState.WAITING_FOR_USER, DecisionType.ASK_USER, match.reason, match.best?.confidence ?: 0.0)
                         return finish(ExecutionState.WAITING_FOR_USER, match.reason, clarReq)
@@ -696,5 +818,37 @@ class ExecutionEngine(
 
         blocked()?.let { return it }
         return finish(ExecutionState.COMPLETED, null)
+    }
+
+    companion object {
+        fun isPermanentSafetyBlock(reason: String): Boolean {
+            val lower = reason.lowercase()
+            return lower.contains("credential") ||
+                lower.contains("login") ||
+                lower.contains("password") ||
+                lower.contains("pin") ||
+                lower.contains("payment") ||
+                lower.contains("monetary") ||
+                lower.contains("explicit user handoff") ||
+                lower.contains("cannot be established safely") ||
+                lower.contains("strictly prohibited")
+        }
+
+        fun isOwnApp(packageName: String?): Boolean {
+            if (packageName.isNullOrBlank()) return false
+            val pkg = packageName.lowercase()
+            val own = "com.chockxlate.teachablevoice"
+            return pkg == own || pkg.startsWith("$own.")
+        }
+
+        fun isSystemSurface(packageName: String?): Boolean {
+            if (packageName.isNullOrBlank()) return false
+            val pkg = packageName.lowercase()
+            return pkg == "android" || pkg.startsWith("android.") ||
+                pkg.startsWith("com.android.systemui") ||
+                pkg.contains("launcher") || pkg.endsWith(".home") || pkg.contains(".home.") ||
+                pkg.endsWith(".launcher3") || pkg.contains("nexuslauncher") || pkg.contains("quickstep") ||
+                pkg.contains("recents") || pkg.contains("overview")
+        }
     }
 }

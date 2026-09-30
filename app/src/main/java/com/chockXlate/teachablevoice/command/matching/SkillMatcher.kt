@@ -60,7 +60,8 @@ class SkillMatcher(
                 }
             }
 
-            val wfIntent = workflow.intent.lowercase().trim()
+            val wfIntent = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
+                .canonicalizeIntent(workflow.intent).lowercase().trim()
             val isIntentMatch = (wfIntent == cmdIntentCanonical)
 
             if (!isIntentMatch) {

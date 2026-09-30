@@ -199,6 +199,14 @@ class TeachingDemoActivity : Activity() {
             setOnClickListener { executeWithPerson2Runtime() }
         }
 
+        val resumeRuntimeBtn = Button(this).apply {
+            text = "RESUME RUNTIME"
+            setBackgroundColor(Color.parseColor("#00ACC1"))
+            setTextColor(Color.WHITE)
+            setTypeface(null, Typeface.BOLD)
+            setOnClickListener { resumeRuntimeExecution() }
+        }
+
         val ackHandoffBtn = Button(this).apply {
             text = "RESET / ACKNOWLEDGE HANDOFF"
             setBackgroundColor(Color.parseColor("#FB8C00"))
@@ -244,7 +252,7 @@ class TeachingDemoActivity : Activity() {
         setupCard.addView(createButtonRow(startBtn, stopBtn))
         setupCard.addView(createButtonRow(normalizeBtn, semanticBtn, intentBtn, slotsBtn, alignInferBtn, synthesizeBtn))
         setupCard.addView(createButtonRow(validateStoreBtn, inspectBtn, understandCmdBtn, matchSkillBtn, createRequestBtn))
-        setupCard.addView(createButtonRow(executeRuntimeBtn, ackHandoffBtn, cancelRuntimeBtn, accessibilitySettingsBtn))
+        setupCard.addView(createButtonRow(executeRuntimeBtn, resumeRuntimeBtn, ackHandoffBtn, cancelRuntimeBtn, accessibilitySettingsBtn))
         setupCard.addView(Button(this).apply {
             text = "LAST RUN"
             setOnClickListener {
@@ -320,6 +328,7 @@ class TeachingDemoActivity : Activity() {
         if (isExecuting.get()) return
 
         TeachingSessionManager.startSession(skill, intent)
+        TeachableVoiceAccessibilityService.instance?.isTeachingModeActive = true
         statusTextView.text = "STATUS: TEACHING ACTIVE (Skill: '$skill')"
         statusTextView.setTextColor(Color.parseColor("#00E676"))
         traceInspectorTextView.text = "=== TEACHING SESSION STARTED ===\nSkill: $skill\nIntent: $intent\n\nReady to record events..."
@@ -337,6 +346,7 @@ class TeachingDemoActivity : Activity() {
     }
 
     private fun stopTeachingSession() {
+        TeachableVoiceAccessibilityService.instance?.isTeachingModeActive = false
         val trace = TeachingSessionManager.stopSession()
         if (trace == null) {
             statusTextView.text = "STATUS: TEACHING INACTIVE"
@@ -381,7 +391,8 @@ class TeachingDemoActivity : Activity() {
             }
 
         val normResult = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace)
-        val actions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace)
+        val filterResult = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(normResult.normalizedTrace)
+        val actions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace, filterResult)
 
         statusTextView.text = "STATUS: PHASE 3 SEMANTIC ACTIONS EXTRACTED (${actions.size} Actions)"
         statusTextView.setTextColor(Color.parseColor("#00E5FF"))
@@ -399,7 +410,8 @@ class TeachingDemoActivity : Activity() {
             }
 
         val normResult = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace)
-        val semanticActions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace)
+        val filterResult = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(normResult.normalizedTrace)
+        val semanticActions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace, filterResult)
         val intentResult = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(normResult.normalizedTrace, semanticActions)
 
         statusTextView.text = "STATUS: PHASE 4 INTENT EXTRACTED ('${intentResult.intent.canonicalName}', ${intentResult.intent.confidenceLevel})"
@@ -418,7 +430,8 @@ class TeachingDemoActivity : Activity() {
             }
 
         val normResult = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace)
-        val semanticActions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace)
+        val filterResult = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(normResult.normalizedTrace)
+        val semanticActions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(normResult.normalizedTrace, filterResult)
         val intentResult = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(normResult.normalizedTrace, semanticActions)
         val slotResult = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(normResult.normalizedTrace, semanticActions, intentResult)
 
@@ -439,7 +452,8 @@ class TeachingDemoActivity : Activity() {
 
         // Demo 1 processing
         val norm1 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace1)
-        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace)
+        val filterResult1 = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(norm1.normalizedTrace)
+        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace, filterResult1)
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
@@ -469,7 +483,8 @@ class TeachingDemoActivity : Activity() {
 
         // Demo 1
         val norm1 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace1)
-        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace)
+        val filterResult1 = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(norm1.normalizedTrace)
+        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace, filterResult1)
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
@@ -488,7 +503,8 @@ class TeachingDemoActivity : Activity() {
             slotResult = slot1,
             alignmentResult = alignmentResult,
             inferenceResult = inferenceResult,
-            trace = norm1.normalizedTrace
+            trace = norm1.normalizedTrace,
+            filterResult = filterResult1
         )
 
         statusTextView.text = "STATUS: PHASE 7 WORKFLOW SYNTHESIZED (Status: ${synthesisResult.status}, Steps: ${synthesisResult.workflow?.steps?.size ?: 0})"
@@ -519,7 +535,8 @@ class TeachingDemoActivity : Activity() {
 
         // Run full Phase 1-7 pipeline
         val norm1 = com.chockXlate.teachablevoice.teach.normalization.DemonstrationTraceNormalizer.normalize(targetTrace1)
-        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace)
+        val filterResult1 = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(norm1.normalizedTrace)
+        val actions1 = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(norm1.normalizedTrace, filterResult1)
         val intent1 = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(norm1.normalizedTrace, actions1)
         val slot1 = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(norm1.normalizedTrace, actions1, intent1)
         val demoDataset1 = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(norm1.normalizedTrace.traceId, norm1.normalizedTrace.traceId, intent1, slot1)
@@ -549,7 +566,8 @@ class TeachingDemoActivity : Activity() {
             slotResult = slot1,
             alignmentResult = alignmentResult,
             inferenceResult = confirmedInference,
-            trace = norm1.normalizedTrace
+            trace = norm1.normalizedTrace,
+            filterResult = filterResult1
         )
 
         if (!synthesisResult.isExecutable) {
@@ -715,15 +733,11 @@ class TeachingDemoActivity : Activity() {
             return
         }
 
-        statusTextView.text = "STATUS: RUNTIME EXECUTING (${request.executionId})..."
+        statusTextView.text = "STATUS: RUNTIME WAITING FOR TARGET APP (${request.executionId})..."
         statusTextView.setTextColor(Color.parseColor("#00E5FF"))
-        traceInspectorTextView.text = "=== LAUNCHING PERSON 2 EXECUTION ENGINE ===\nExecution ID: ${request.executionId}\nSkill ID: ${request.skillId}\n\nSwitch to the taught app now. Execution begins in 5 seconds."
+        traceInspectorTextView.text = "=== LAUNCHING PERSON 2 EXECUTION ENGINE ===\nExecution ID: ${request.executionId}\nSkill ID: ${request.skillId}\n\nOpen the demonstrated app to continue. Execution will resume automatically when the app is active."
 
         val targetRequest = request
-        val launchToken = java.util.UUID.randomUUID().toString()
-        RuntimeSession.pendingRequest.set(launchToken)
-        android.os.Handler(mainLooper).postDelayed({
-            if (!RuntimeSession.pendingRequest.compareAndSet(launchToken, null)) return@postDelayed
         Thread {
             val suspendBlock: suspend () -> RuntimeReport = {
                 runtimeEngine.execute(targetRequest)
@@ -744,7 +758,38 @@ class TeachingDemoActivity : Activity() {
                 }
             })
         }.start()
-        }, 5000L)
+    }
+
+    private fun resumeRuntimeExecution() {
+        if (!isExecuting.compareAndSet(false, true)) {
+            statusTextView.text = "STATUS: RUNTIME ALREADY EXECUTING"
+            statusTextView.setTextColor(Color.parseColor("#FFD600"))
+            return
+        }
+        statusTextView.text = "STATUS: RESUMING RUNTIME..."
+        statusTextView.setTextColor(Color.parseColor("#00E5FF"))
+        traceInspectorTextView.text = "=== RESUMING PERSON 2 EXECUTION ENGINE ===\nOpen the demonstrated app to continue."
+
+        Thread {
+            val suspendBlock: suspend () -> RuntimeReport = {
+                runtimeEngine.resume()
+            }
+            suspendBlock.startCoroutine(object : Continuation<RuntimeReport> {
+                override val context = EmptyCoroutineContext
+                override fun resumeWith(result: Result<RuntimeReport>) {
+                    runOnUiThread {
+                        isExecuting.set(false)
+                        result.onSuccess { report ->
+                            handleRuntimeReport(report)
+                        }.onFailure { error ->
+                            statusTextView.text = "STATUS: RUNTIME UNCAUGHT ERROR (${error.javaClass.simpleName})"
+                            statusTextView.setTextColor(Color.parseColor("#FF5252"))
+                            traceInspectorTextView.text = "Runtime failed. No completion can be established."
+                        }
+                    }
+                }
+            })
+        }.start()
     }
 
     private fun handleRuntimeReport(report: RuntimeReport) {
@@ -790,6 +835,7 @@ class TeachingDemoActivity : Activity() {
     private fun cancelRuntimeExecution() {
         if (RuntimeSession.pendingRequest.getAndSet(null) != null) isExecuting.set(false)
         runtimeEngine.cancel()
+        isExecuting.set(false)
         statusTextView.text = "STATUS: RUNTIME CANCELLATION REQUESTED"
         statusTextView.setTextColor(Color.parseColor("#FF9100"))
     }

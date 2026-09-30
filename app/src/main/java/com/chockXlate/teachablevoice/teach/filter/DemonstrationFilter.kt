@@ -27,11 +27,24 @@ object DemonstrationFilter {
         "com.android.permissioncontroller"
     )
 
+    fun isOwnApp(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val own = try {
+            com.chockXlate.teachablevoice.app.service.TeachableVoiceAccessibilityService.instance?.getServicePackageName()
+                ?: "com.chockXlate.teachablevoice"
+        } catch (t: Throwable) {
+            "com.chockXlate.teachablevoice"
+        }
+        val pkg = packageName.lowercase()
+        val ownLower = own.lowercase()
+        return pkg == ownLower || pkg.startsWith("$ownLower.")
+    }
+
     fun isSystemSurface(packageName: String?): Boolean {
         if (packageName.isNullOrBlank()) return false
         val pkg = packageName.lowercase()
         if (SYSTEM_OR_LAUNCHER_PACKAGE_PATTERNS.any { pkg == it || pkg.startsWith("$it.") }) return true
-        if (pkg.contains("launcher") || pkg.contains("home") || pkg.endsWith(".launcher3")) return true
+        if (isLauncherSurface(pkg)) return true
         if (pkg.contains("inputmethod") || pkg.contains("keyboard") || pkg.contains("honeyboard") ||
             pkg.contains("swiftkey") || pkg.contains("latin")) return true
         return false
@@ -40,7 +53,10 @@ object DemonstrationFilter {
     fun isLauncherSurface(packageName: String?): Boolean {
         if (packageName.isNullOrBlank()) return false
         val pkg = packageName.lowercase()
-        return pkg.contains("launcher") || pkg.contains("home") || pkg.endsWith(".launcher3")
+        if (pkg.contains("search") || pkg.contains("browser") || pkg.contains("chrome")) return false
+        return pkg.contains("launcher") || pkg.endsWith(".home") || pkg.contains(".home.") ||
+            pkg.endsWith(".launcher3") || pkg.contains("nexuslauncher") || pkg.contains("quickstep") ||
+            pkg.contains("recents") || pkg.contains("overview")
     }
 
     fun isKeyboardSurface(packageName: String?): Boolean {
@@ -50,12 +66,31 @@ object DemonstrationFilter {
             pkg.contains("swiftkey") || pkg.contains("latin")
     }
 
+    private val GENERIC_CONTAINER_ROLES = setOf(
+        "framelayout", "linearlayout", "relativelayout", "viewgroup",
+        "view", "viewstub", "scrollview", "horizontalscrollview",
+        "nestedscrollview", "coordinatorlayout", "constraintlayout",
+        "drawerlayout", "viewpager", "viewpager2", "recyclerview",
+        "listview", "gridview", "cardview"
+    )
+
+    fun isAnonymousContainer(selector: com.chockXlate.teachablevoice.contract.workflow.SemanticSelector): Boolean {
+        val role = selector.role?.substringAfterLast('.')?.lowercase() ?: return true
+        val isGenericRole = role.isBlank() || role in GENERIC_CONTAINER_ROLES
+        val hasEvidence = !selector.text.isNullOrBlank() ||
+            !selector.contentDescription.isNullOrBlank() ||
+            !selector.resourceId.isNullOrBlank() ||
+            !selector.nearbyText.isNullOrBlank() ||
+            !selector.textSlot.isNullOrBlank()
+        return isGenericRole && !hasEvidence
+    }
+
     fun filter(trace: DemonstrationTrace): FilteredDemonstrationResult {
         val allFiltered = mutableListOf<FilteredTraceEvent>()
 
         // 1. Resolve primary target application package(s)
         val candidatePackages = mutableListOf<String>()
-        if (trace.appContext.isNotBlank() && trace.appContext != "unknown" && !isSystemSurface(trace.appContext)) {
+        if (trace.appContext.isNotBlank() && trace.appContext != "unknown" && !isSystemSurface(trace.appContext) && !isOwnApp(trace.appContext)) {
             candidatePackages.add(trace.appContext)
         }
 
@@ -66,26 +101,51 @@ object DemonstrationFilter {
             .ifEmpty { trace.userActions }
 
         for (action in actions) {
-            val pkg = if (action.semanticSelector.resourceId?.contains(":id/") == true) {
-                action.semanticSelector.resourceId!!.substringBefore(":id/")
-            } else null
-            // Also check state events if matching
+            val resPkg = action.semanticSelector.resourceId?.takeIf { it.contains(":id/") }?.substringBefore(":id/")
             val stateEv = trace.stateEvents.find { it.causeActionId == action.actionId }
-            val statePkg = stateEv?.afterState?.appContext ?: stateEv?.beforeState?.appContext
-            val resolvedPkg = statePkg ?: pkg
-            if (!resolvedPkg.isNullOrBlank() && !isSystemSurface(resolvedPkg)) {
+            val statePkg = stateEv?.beforeState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" }
+                ?: stateEv?.afterState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" }
+
+            val resolvedPkg = action.packageName?.takeIf { it.isNotBlank() && it != "unknown" }
+                ?: statePkg
+                ?: resPkg
+
+            if (!resolvedPkg.isNullOrBlank() && !isSystemSurface(resolvedPkg) && !isOwnApp(resolvedPkg)) {
                 candidatePackages.add(resolvedPkg)
             }
         }
 
+        if (candidatePackages.isEmpty()) {
+            val uiPkgs = trace.traceEvents.filterIsInstance<TraceEvent.Ui>()
+                .map { it.uiEvent.packageName }
+                .filter { it.isNotBlank() && it != "unknown" && !isSystemSurface(it) && !isOwnApp(it) }
+            candidatePackages.addAll(uiPkgs)
+            if (candidatePackages.isEmpty()) {
+                val statePkgs = trace.uiStates.map { it.appContext }
+                    .filter { it.isNotBlank() && it != "unknown" && !isSystemSurface(it) && !isOwnApp(it) }
+                candidatePackages.addAll(statePkgs)
+            }
+        }
+
         val primaryTargetPackage = candidatePackages.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-            ?: trace.appContext.ifBlank { "unknown" }
+            ?: trace.appContext.takeIf { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
+            ?: actions.mapNotNull { it.packageName }.firstOrNull { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
+            ?: "unknown"
 
         // Find the timestamp when the target application was first engaged
         val firstTargetEngagementTimestamp = actions.firstOrNull { action ->
+            val resPkg = action.semanticSelector.resourceId?.takeIf { it.contains(":id/") }?.substringBefore(":id/")
             val stateEv = trace.stateEvents.find { it.causeActionId == action.actionId }
-            val pkg = stateEv?.beforeState?.appContext ?: stateEv?.afterState?.appContext ?: primaryTargetPackage
-            !isSystemSurface(pkg)
+            val statePkg = stateEv?.afterState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" && !isSystemSurface(it) }
+                ?: stateEv?.beforeState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" && !isSystemSurface(it) }
+            val resolvedPkg = action.packageName?.takeIf { it.isNotBlank() && it != "unknown" }
+                ?: resPkg
+                ?: statePkg
+                ?: if (primaryTargetPackage != "unknown") primaryTargetPackage else null
+
+            val isTextInput = action.actionType == "INPUT_TEXT" || !action.inputData.isNullOrBlank()
+
+            (resolvedPkg != null && !isSystemSurface(resolvedPkg) && !isOwnApp(resolvedPkg)) || (isTextInput && primaryTargetPackage != "unknown")
         }?.timestamp ?: Long.MAX_VALUE
 
         // Track seen packages to evaluate cross-package continuity
@@ -175,106 +235,188 @@ object DemonstrationFilter {
         trace: DemonstrationTrace
     ): FilteredTraceEvent {
         val stateEv = trace.stateEvents.find { it.causeActionId == action.actionId }
-        val resIdPkg = if (action.semanticSelector.resourceId?.contains(":id/") == true) {
-            action.semanticSelector.resourceId!!.substringBefore(":id/")
-        } else null
-        val pkg = stateEv?.afterState?.appContext
-            ?: stateEv?.beforeState?.appContext
-            ?: resIdPkg
+        val resIdPkg = action.semanticSelector.resourceId?.takeIf { it.contains(":id/") }?.substringBefore(":id/")
+        val matchingUi = trace.traceEvents.asSequence()
+            .filterIsInstance<TraceEvent.Ui>()
+            .map { it.uiEvent }
+            .find { it.timestamp == action.timestamp || (kotlin.math.abs(it.timestamp - action.timestamp) <= 100L && it.targetElement?.text == action.semanticSelector.text) }
+
+        val isTextInput = action.actionType == "INPUT_TEXT" || !action.inputData.isNullOrBlank()
+
+        val rawOriginPkg = action.packageName?.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: matchingUi?.packageName?.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: stateEv?.beforeState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: resIdPkg?.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: stateEv?.afterState?.appContext?.takeIf { it.isNotBlank() && it != "unknown" }
             ?: primaryPackage
 
-        val isSystem = isSystemSurface(pkg)
-        val isLauncher = isLauncherSurface(pkg)
-        val isKeyboard = isKeyboardSurface(pkg)
+        // Re-attribute text input from keyboard window to genuine target application
+        val originPkg = if (isTextInput && (isKeyboardSurface(rawOriginPkg) || rawOriginPkg == "unknown" || isSystemSurface(rawOriginPkg))) {
+            val targetApp = primaryPackage.takeIf { it != "unknown" && !isSystemSurface(it) && !isOwnApp(it) }
+                ?: trace.appContext.takeIf { it.isNotBlank() && it != "unknown" && !isSystemSurface(it) && !isOwnApp(it) }
+                ?: rawOriginPkg
+            targetApp
+        } else {
+            rawOriginPkg
+        }
 
-        // Rule 1: Launcher navigation before target task
-        if (isLauncher || (action.timestamp < firstTargetEngagementTimestamp && isSystem)) {
-            return FilteredTraceEvent(
+        val destPkg = stateEv?.afterState?.appContext ?: originPkg
+
+        val isOwn = isOwnApp(originPkg)
+        val isSystem = isSystemSurface(originPkg)
+        val isLauncher = isLauncherSurface(originPkg)
+        val isKeyboard = isKeyboardSurface(originPkg)
+
+        // Rule 0: Own-package interaction must NEVER become learned workflow action
+        if (isOwn) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.SYSTEM_NOISE,
+                reason = "Interaction belongs to assistant's own application package.",
+                packageName = originPkg,
+                isSystemSurface = true,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule 1: Launcher or Recents transition navigation
+        if (!isTextInput && (isLauncher || (action.timestamp < firstTargetEngagementTimestamp && isSystem))) {
+            val res = FilteredTraceEvent(
                 eventId = action.actionId,
                 classification = DemonstrationFilterClassification.NAVIGATION_CONTEXT,
-                reason = "Launcher or home navigation prior to target application engagement.",
-                packageName = pkg,
+                reason = "Launcher or Recents transition navigation.",
+                packageName = originPkg,
                 isSystemSurface = true,
                 isActionable = true
             )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
         }
 
         // Rule 2: Keyboard window or IME events without inputData
         if (isKeyboard && action.inputData.isNullOrBlank() && action.actionType != "INPUT_TEXT") {
-            return FilteredTraceEvent(
+            val res = FilteredTraceEvent(
                 eventId = action.actionId,
                 classification = DemonstrationFilterClassification.NAVIGATION_CONTEXT,
                 reason = "Keyboard surface transition without input text payload.",
-                packageName = pkg,
+                packageName = originPkg,
                 isSystemSurface = true,
                 isActionable = true
             )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
         }
 
-        // Rule 3: System UI (status bar, volume dialog, notification shade)
-        if (isSystem && !isKeyboard) {
-            return FilteredTraceEvent(
+        // Rule 3: System UI (status bar, volume dialog, notification shade, nav bar)
+        if (isSystem && !isKeyboard && !isTextInput) {
+            val res = FilteredTraceEvent(
                 eventId = action.actionId,
                 classification = DemonstrationFilterClassification.SYSTEM_NOISE,
                 reason = "Transient system UI interaction not contributing to target task.",
-                packageName = pkg,
+                packageName = originPkg,
                 isSystemSurface = true,
                 isActionable = false
             )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
         }
 
-        // Rule 4: Action lacks identifiable semantic target
+        // Rule 3.5: Transition back to own app
+        if (isOwnApp(destPkg) && originPkg != destPkg) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.NAVIGATION_CONTEXT,
+                reason = "Navigation transition returning to assistant application.",
+                packageName = originPkg,
+                isSystemSurface = true,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule 4: Anonymous container lacking meaningful semantic target evidence
         val selector = action.semanticSelector
+        if (isAnonymousContainer(selector) && !isTextInput) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.UNCERTAIN,
+                reason = "Action on anonymous container '${selector.role ?: "View"}' lacks text, contentDescription, resourceId, and relational evidence.",
+                packageName = originPkg,
+                isSystemSurface = isSystem,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
         val hasIdentity = !selector.role.isNullOrBlank() ||
             !selector.resourceId.isNullOrBlank() ||
             !selector.text.isNullOrBlank() ||
             !selector.contentDescription.isNullOrBlank() ||
-            !selector.textSlot.isNullOrBlank()
+            !selector.textSlot.isNullOrBlank() ||
+            isTextInput
 
         if (!hasIdentity) {
-            return FilteredTraceEvent(
+            val res = FilteredTraceEvent(
                 eventId = action.actionId,
                 classification = DemonstrationFilterClassification.UNCERTAIN,
                 reason = "Action contains no identifiable semantic selector attributes.",
-                packageName = pkg,
+                packageName = originPkg,
                 isSystemSurface = isSystem,
                 isActionable = false
             )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
         }
 
         // Rule 5: Legitimate cross-package transition vs unrelated foreign package
-        if (pkg != primaryPackage && !isSystem) {
-            val count = packageContinuity[pkg] ?: 0
-            if (count >= 1) {
-                return FilteredTraceEvent(
+        if (originPkg != primaryPackage && !isSystem) {
+            val count = packageContinuity[originPkg] ?: 0
+            if (count >= 1 || (action.packageName == originPkg && !isSystemSurface(originPkg))) {
+                val res = FilteredTraceEvent(
                     eventId = action.actionId,
                     classification = DemonstrationFilterClassification.TASK_RELEVANT,
-                    reason = "Legitimate cross-package interaction in '$pkg' with task continuity.",
-                    packageName = pkg,
+                    reason = "Legitimate cross-package interaction in '$originPkg' with task continuity.",
+                    packageName = originPkg,
                     isSystemSurface = false,
                     isActionable = true
                 )
+                safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+                return res
             } else {
-                return FilteredTraceEvent(
+                val res = FilteredTraceEvent(
                     eventId = action.actionId,
                     classification = DemonstrationFilterClassification.SYSTEM_NOISE,
-                    reason = "Incidental action in unrelated package '$pkg' without task continuity.",
-                    packageName = pkg,
+                    reason = "Incidental action in unrelated package '$originPkg' without task continuity.",
+                    packageName = originPkg,
                     isSystemSurface = false,
                     isActionable = false
                 )
+                safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+                return res
             }
         }
 
         // Rule 6: Target app action with identifiable target
-        return FilteredTraceEvent(
+        val res = FilteredTraceEvent(
             eventId = action.actionId,
             classification = DemonstrationFilterClassification.TASK_RELEVANT,
-            reason = "Task-relevant action in application '$pkg'.",
-            packageName = pkg,
+            reason = "Task-relevant action in application '$originPkg'.",
+            packageName = originPkg,
             isSystemSurface = false,
             isActionable = true
         )
+        safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+        return res
+    }
+
+    private fun safeLogFilter(action: String, pkg: String, classification: String, actionable: Boolean, reason: String) {
+        try {
+            android.util.Log.d("TVA_FILTER", "action=$action pkg=$pkg classification=$classification actionable=$actionable reason=$reason")
+        } catch (t: Throwable) {}
     }
 
     private fun classifyState(

@@ -20,7 +20,12 @@ object SemanticCommandPolicy {
         "search_information" to listOf("item")
     )
 
-    fun bindableSlots(intent: String): Set<String> = when (intent) {
+    fun canonicalizeIntent(intent: String): String = when (intent.trim().lowercase()) {
+        "search_item" -> "search_information"
+        else -> intent.trim()
+    }
+
+    fun bindableSlots(intent: String): Set<String> = when (canonicalizeIntent(intent)) {
         "order_food" -> setOf("item", "restaurant", "quantity", "address")
         "search_information" -> setOf("item")
         else -> emptySet()
@@ -83,7 +88,9 @@ object SemanticCommandPolicy {
         val slots = extractSlotsFromCommand(rawCommand, normalized, canonicalIntent, diagnostics)
 
         // 3. Identify Unresolved Expected Slots
-        val expectedSlots = EXPECTED_CANONICAL_SLOTS[canonicalIntent] ?: emptyList()
+        val expectedSlots = EXPECTED_CANONICAL_SLOTS[canonicalIntent]
+            ?: EXPECTED_CANONICAL_SLOTS[canonicalizeIntent(canonicalIntent)]
+            ?: emptyList()
         val extractedSlotNames = slots.map { it.name }.toSet()
         val missing = expectedSlots.filter { it !in extractedSlotNames }
         unresolvedItems.addAll(missing)
@@ -131,9 +138,10 @@ object SemanticCommandPolicy {
     ): List<CommandSlot> {
         val slots = mutableListOf<CommandSlot>()
 
-        if (canonicalIntent == "search_information") {
+        if (canonicalizeIntent(canonicalIntent) == "search_information") {
+            val cleaned = rawCommand.trim().trimEnd('.', '?', '!')
             val query = Regex("""^(?:search(?: for)?|find|look up|lookup)\s+(.+)$""", RegexOption.IGNORE_CASE)
-                .find(rawCommand.trim())?.groupValues?.get(1)?.trim()
+                .find(cleaned)?.groupValues?.get(1)?.trim()
             if (!query.isNullOrBlank()) slots.add(CommandSlot(name = "item", type = SlotType.TEXT,
                 rawValue = query, typedValue = query, confidence = 1.0, confidenceLevel = "HIGH",
                 provenance = "Explicit search query"))

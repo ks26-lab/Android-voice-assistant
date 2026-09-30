@@ -18,6 +18,7 @@ import com.chockXlate.teachablevoice.learning.inference.SlotInferenceStatus
 import com.chockXlate.teachablevoice.learning.intent.IntentExtractionResult
 import com.chockXlate.teachablevoice.learning.slots.SlotExtractionResult
 import com.chockXlate.teachablevoice.learning.targets.SemanticTarget
+import com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter
 import java.util.UUID
 
 /**
@@ -38,7 +39,8 @@ object WorkflowSynthesizer {
         slotResult: SlotExtractionResult,
         alignmentResult: AlignmentResult,
         inferenceResult: InferenceResult,
-        trace: DemonstrationTrace
+        trace: DemonstrationTrace,
+        filterResult: com.chockXlate.teachablevoice.contract.filter.FilteredDemonstrationResult? = null
     ): WorkflowSynthesisResult {
         val diagnostics = mutableListOf<String>()
         val warnings = mutableListOf<String>()
@@ -48,7 +50,8 @@ object WorkflowSynthesizer {
                 diagnostics = listOf("Conflicting teaching evidence must be resolved by a consistent demonstration before saving. No literal fallback is allowed."))
         }
 
-        val intentName = intentResult.intent.canonicalName
+        val intentName = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
+            .canonicalizeIntent(intentResult.intent.canonicalName)
         if (intentName.equals("unknown", ignoreCase = true) || intentResult.confidence < 0.3) {
             diagnostics.add("Synthesis blocked: Unknown or low-confidence intent ('$intentName').")
             return WorkflowSynthesisResult(
@@ -201,10 +204,14 @@ object WorkflowSynthesizer {
             }
 
             // Preconditions
+            val stepPackage = target?.packageName?.takeIf { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
+                ?: trace.appContext.takeIf { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
+                ?: target?.packageName?.takeIf { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isOwnApp(it) }
+                ?: trace.appContext.takeIf { !DemonstrationFilter.isOwnApp(it) }
             val preconditions = Preconditions(
                 schemaVersion = "1.0",
                 fromState = if (index > 0) "state_step_${index}" else "INITIAL_STATE",
-                requiredPackage = trace.appContext.ifBlank { target?.packageName },
+                requiredPackage = stepPackage,
                 requiredElementPresent = selector
             )
 
@@ -429,7 +436,7 @@ object WorkflowSynthesizer {
         val skillHash = hashBytes.take(4).joinToString("") { "%02x".format(it) }
 
         val parameterizedSteps = QuantityPattern.parameterize(workflowSteps, semanticActions, trace, workflowSlots)
-        val filterResult = com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(trace)
+        val effectiveFilter = filterResult ?: com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter.filter(trace)
         val generatedSkillId = "skill_${intentName}_$skillHash"
         val provGraph = com.chockXlate.teachablevoice.learning.provenance.DemonstrationProvenanceBuilder.build(
             workflowSkillId = generatedSkillId,
@@ -437,7 +444,7 @@ object WorkflowSynthesizer {
             steps = parameterizedSteps,
             semanticActions = semanticActions,
             inferenceResult = inferenceResult,
-            filterResult = filterResult
+            filterResult = effectiveFilter
         )
         val stepsWithProv = parameterizedSteps.map { step ->
             val link = provGraph.findStepProvenance(step.stepId)
@@ -445,12 +452,18 @@ object WorkflowSynthesizer {
         }
         val subtasks = com.chockXlate.teachablevoice.learning.subtask.WorkflowSubtaskSegmenter.segment(stepsWithProv)
 
+        val primaryApp = stepsWithProv.mapNotNull { it.preconditions.requiredPackage }
+            .firstOrNull { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
+            ?: trace.appContext.takeIf { !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) && it.isNotBlank() && it != "unknown" }
+            ?: stepsWithProv.firstOrNull()?.preconditions?.requiredPackage?.takeIf { !DemonstrationFilter.isOwnApp(it) }
+            ?: "com.teachablevoice.app"
+
         val workflow = Workflow(
             schemaVersion = "1.0",
             skillId = generatedSkillId,
             name = "Workflow for $intentName",
             intent = intentName,
-            appContext = trace.appContext.ifBlank { "com.teachablevoice.app" },
+            appContext = primaryApp,
             slots = workflowSlots.sortedBy { it.name },
             steps = stepsWithProv,
             safetyBoundary = safetyBoundary,

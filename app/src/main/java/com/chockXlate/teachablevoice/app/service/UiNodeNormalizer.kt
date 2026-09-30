@@ -48,7 +48,7 @@ object UiNodeNormalizer {
         val className = node.className?.toString() ?: "android.view.View"
         val simpleRole = className.substringAfterLast('.')
 
-        val protected = TeachingPrivacyGuard.protectedField(node)
+        val protected = TeachingPrivacyGuard.isSensitiveCredentialTarget(node)
         val text = if (protected) null else node.text?.toString()
         val contentDescription = if (protected) null else node.contentDescription?.toString()
         val resourceId = node.viewIdResourceName

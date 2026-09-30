@@ -34,7 +34,8 @@ object SlotExtractor {
         "send_message" to listOf("recipient", "message"),
         "book_appointment" to listOf("service", "date", "time"),
         "create_reminder" to listOf("task", "time"),
-        "navigate" to listOf("destination")
+        "navigate" to listOf("destination"),
+        "search_information" to listOf("item")
     )
 
     private fun deterministicSlotId(traceId: String, slotName: String, slotType: SlotType, value: String): String {
@@ -54,8 +55,11 @@ object SlotExtractor {
         val fullTranscript = voiceEvents.map { it.transcript.trim() }
             .filter { it.isNotBlank() }
             .joinToString(" ")
+            .ifBlank { intentResult.intent.sourceVoiceTranscript?.trim().orEmpty() }
 
-        val primaryVoiceId = voiceEvents.firstOrNull()?.eventId
+        val primaryVoiceId = voiceEvents.firstOrNull()?.eventId ?: intentResult.intent.sourceVoiceEventIds.firstOrNull()
+        val canonicalIntent = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
+            .canonicalizeIntent(intentResult.intent.canonicalName)
 
         // 1. Extract Candidate Evidence from Semantic Actions
         for (action in semanticActions) {
@@ -63,13 +67,15 @@ object SlotExtractor {
             val target = action.target
             val targetResId = target?.resourceId?.lowercase() ?: ""
             val targetText = target?.text?.lowercase() ?: ""
+            val targetDesc = target?.contentDescription?.lowercase() ?: ""
             val targetRole = target?.role ?: ""
 
             if (!inputVal.isNullOrBlank()) {
-                val inferred = inferSlotNameAndType(targetResId, targetText, inputVal)
+                val hasSpokenTranscript = fullTranscript.isNotBlank()
+                val inferred = inferSlotNameAndType(canonicalIntent, targetResId, targetText, targetDesc, inputVal, hasSpokenTranscript)
                 val spoken = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
                     .understandCommand(fullTranscript).slots.filter { it.rawValue.equals(inputVal, true) || it.typedValue.equals(inputVal, true) }
-                val (slotName, slotType) = if (inferred.first == "input_text" && spoken.size == 1)
+                val (slotName, slotType) = if (spoken.size == 1)
                     spoken.single().let { it.name to it.type } else inferred
                 candidates.add(
                     CandidateSlotEvidence(
@@ -194,7 +200,7 @@ object SlotExtractor {
         }
 
         // 4. Identify Unresolved Expected Slots
-        val intentName = intentResult.intent.canonicalName
+        val intentName = canonicalIntent
         val expected = EXPECTED_CANONICAL_SLOTS[intentName] ?: emptyList()
         val extractedNames = extractedSlots.map { it.name }.toSet()
         val unresolved = expected.filter { it !in extractedNames }
@@ -210,17 +216,25 @@ object SlotExtractor {
         )
     }
 
-    private fun inferSlotNameAndType(targetResId: String, targetText: String, inputVal: String): Pair<String, SlotType> {
+    private fun inferSlotNameAndType(
+        canonicalIntent: String,
+        targetResId: String,
+        targetText: String,
+        targetDesc: String,
+        inputVal: String,
+        hasSpokenTranscript: Boolean
+    ): Pair<String, SlotType> {
         val num = inputVal.toIntOrNull()
-        if (num != null) {
+        if (num != null && canonicalIntent != "search_information") {
             return Pair("quantity", SlotType.INTEGER)
         }
         val dbl = inputVal.toDoubleOrNull()
-        if (dbl != null) {
+        if (dbl != null && canonicalIntent != "search_information") {
             return Pair("amount", SlotType.DECIMAL)
         }
 
-        if (targetResId.contains("search") || targetResId.contains("dish") || targetResId.contains("item") || targetText.contains("search")) {
+        if (targetResId.contains("search") || targetResId.contains("dish") || targetResId.contains("item") ||
+            targetText.contains("search") || targetDesc.contains("search") || targetDesc.contains("query") || targetDesc.contains("find")) {
             return Pair("item", SlotType.TEXT)
         }
         if (targetResId.contains("restaurant") || targetResId.contains("vendor") || targetResId.contains("store")) {
@@ -228,6 +242,14 @@ object SlotExtractor {
         }
         if (targetResId.contains("address") || targetResId.contains("location") || targetResId.contains("delivery")) {
             return Pair("address", SlotType.ADDRESS)
+        }
+
+        // Canonical intent alignment:
+        // When demonstrating without spoken voice evidence, a text input in a search workflow
+        // aligns to the canonical search slot ("item").
+        // If a spoken command was present but did not match this input, it remains fail-closed ("input_text").
+        if (canonicalIntent == "search_information" && !hasSpokenTranscript) {
+            return Pair("item", SlotType.TEXT)
         }
 
         return Pair("input_text", SlotType.TEXT)

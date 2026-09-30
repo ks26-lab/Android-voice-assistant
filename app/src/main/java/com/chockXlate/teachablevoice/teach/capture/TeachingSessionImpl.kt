@@ -64,6 +64,25 @@ class TeachingSessionImpl(
         }
     }
 
+    private fun isSystemOrOwnPackage(pkg: String): Boolean {
+        val lower = pkg.lowercase()
+        return lower.contains("launcher") || lower.contains("home") || lower.contains("quickstep") ||
+            lower.contains("systemui") || lower.startsWith("android") ||
+            lower == "com.chockXlate.teachablevoice".lowercase() || lower.startsWith("com.chockxlate.teachablevoice.")
+    }
+
+    private fun updateSessionAppContext(incoming: String?) {
+        if (incoming.isNullOrBlank() || incoming == "unknown") return
+        val isSystemOrOwn = isSystemOrOwnPackage(incoming)
+        if (appContext == "unknown" || appContext.isBlank()) {
+            appContext = incoming
+        } else if (isSystemOrOwnPackage(appContext) && !isSystemOrOwn) {
+            appContext = incoming
+        } else if (!isSystemOrOwn) {
+            appContext = incoming
+        }
+    }
+
     override fun recordVoiceEvent(event: VoiceEvent) {
         if (!isRecording) return
         _voiceEvents.add(event)
@@ -72,22 +91,19 @@ class TeachingSessionImpl(
 
     override fun recordUiEvent(event: UiEvent) {
         if (!isRecording) return
-        if (event.packageName.isNotBlank()) {
-            appContext = event.packageName
-        }
+        updateSessionAppContext(event.packageName)
         _traceEvents.add(TraceEvent.Ui(event.eventId, event.timestamp, event))
     }
 
     fun recordUiState(state: UiState) {
         if (!isRecording) return
-        if (state.appContext.isNotBlank()) {
-            appContext = state.appContext
-        }
+        updateSessionAppContext(state.appContext)
         _uiStates.add(state)
     }
 
     override fun recordActionEvent(action: ActionEvent) {
         if (!isRecording) return
+        updateSessionAppContext(action.packageName)
         _userActions.add(action)
         _traceEvents.add(TraceEvent.Action(action.actionId, action.timestamp, action))
     }

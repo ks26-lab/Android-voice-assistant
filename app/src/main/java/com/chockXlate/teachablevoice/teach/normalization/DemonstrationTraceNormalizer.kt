@@ -7,6 +7,7 @@ import com.chockXlate.teachablevoice.contract.event.VoiceEvent
 import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
 import com.chockXlate.teachablevoice.contract.trace.TraceEvent
 import com.chockXlate.teachablevoice.contract.ui.UiState
+import com.chockXlate.teachablevoice.teach.filter.DemonstrationFilter
 import kotlin.math.abs
 
 /**
@@ -60,16 +61,20 @@ object DemonstrationTraceNormalizer {
 
         // 3. App & Window Context Resolution
         var resolvedAppContext = rawTrace.appContext
-        if (resolvedAppContext.isBlank() || resolvedAppContext == "unknown") {
+        if (resolvedAppContext.isBlank() || resolvedAppContext == "unknown" ||
+            DemonstrationFilter.isSystemSurface(resolvedAppContext) ||
+            DemonstrationFilter.isOwnApp(resolvedAppContext)
+        ) {
             val discoveredApp = normalizedEvents.asSequence()
                 .mapNotNull { ev ->
                     when (ev) {
+                        is TraceEvent.Action -> ev.actionEvent.packageName
                         is TraceEvent.Ui -> ev.uiEvent.packageName
                         is TraceEvent.State -> ev.stateEvent.beforeState.appContext
                         else -> null
                     }
                 }
-                .firstOrNull { it.isNotBlank() && it != "unknown" }
+                .firstOrNull { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
 
             if (discoveredApp != null) {
                 resolvedAppContext = discoveredApp

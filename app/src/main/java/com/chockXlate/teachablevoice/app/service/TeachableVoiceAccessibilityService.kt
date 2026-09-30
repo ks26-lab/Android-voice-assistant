@@ -7,6 +7,7 @@ import android.view.accessibility.AccessibilityEvent
 import com.chockXlate.teachablevoice.contract.event.ActionEvent
 import com.chockXlate.teachablevoice.contract.event.StateEvent
 import com.chockXlate.teachablevoice.contract.event.UiEvent
+import com.chockXlate.teachablevoice.contract.ui.UiElement
 import com.chockXlate.teachablevoice.contract.ui.UiState
 import com.chockXlate.teachablevoice.contract.workflow.SemanticSelector
 import com.chockXlate.teachablevoice.teach.capture.TeachingSessionManager
@@ -17,12 +18,39 @@ import java.util.UUID
  * normalizes active window nodes into UiElement/UiState contracts,
  * logs UI structures for development, and captures teaching interaction events.
  */
-class TeachableVoiceAccessibilityService : AccessibilityService() {
+open class TeachableVoiceAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "TeachableVoiceService"
+        const val CAPTURE_TAG = "TVA_CAPTURE"
+        val RELEVANT_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED,
+            AccessibilityEvent.TYPE_VIEW_SELECTED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        )
+        val USER_INTERACTION_EVENT_TYPES = setOf(
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED
+        )
         var instance: TeachableVoiceAccessibilityService? = null
             private set
+
+        internal fun safeLogD(tag: String, msg: String) {
+            try { Log.d(tag, msg) } catch (t: Throwable) {}
+        }
+        internal fun safeLogI(tag: String, msg: String) {
+            try { Log.i(tag, msg) } catch (t: Throwable) {}
+        }
+        internal fun safeLogW(tag: String, msg: String) {
+            try { Log.w(tag, msg) } catch (t: Throwable) {}
+        }
     }
 
     var isTeachingModeActive: Boolean = false
@@ -30,15 +58,22 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         private set
     private var previousUiState: UiState? = null
     private var captureSessionId: String? = null
-    private var capturedPackage: String? = null
     var teachingWarning: String? = null
-        private set
+        internal set
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         isRuntimeReady = true
-        Log.i(TAG, "TeachableVoiceAccessibilityService connected.")
+        safeLogI(TAG, "TeachableVoiceAccessibilityService connected.")
+    }
+
+    internal open fun getServicePackageName(): String {
+        return try {
+            packageName ?: "com.chockXlate.teachablevoice"
+        } catch (t: Throwable) {
+            "com.chockXlate.teachablevoice"
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -47,24 +82,37 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         val isTeaching = isTeachingModeActive || TeachingSessionManager.isTeachingActive()
         if (!isTeaching) return
 
-        val sessionId = TeachingSessionManager.getActiveSession()?.sessionId ?: return
+        val session = TeachingSessionManager.getActiveSession() ?: return
+        val sessionId = session.sessionId
         if (captureSessionId != sessionId) {
             captureSessionId = sessionId
             previousUiState = null
-            capturedPackage = null
             teachingWarning = null
         }
-        if (teachingWarning != null) return
-        val packageName = event.packageName?.toString() ?: return
-        if (packageName == this.packageName) return
-        val actionable = event.eventType in setOf(AccessibilityEvent.TYPE_VIEW_CLICKED,
-            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED, AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)
-        if (capturedPackage == null && !actionable) return
-        if (capturedPackage != null && packageName != capturedPackage) return
+        if (teachingWarning != null) {
+            safeLogD(CAPTURE_TAG, "Rejected: type=${AccessibilityEvent.eventTypeToString(event.eventType)}, reason=paused_at_credential_boundary")
+            return
+        }
+
+        val packageName = event.packageName?.toString() ?: run {
+            safeLogD(CAPTURE_TAG, "Rejected: type=${AccessibilityEvent.eventTypeToString(event.eventType)}, pkg=null, reason=null_package")
+            return
+        }
+
+        val ownPackage = getServicePackageName()
+        if (packageName == ownPackage) {
+            safeLogD(CAPTURE_TAG, "Rejected: type=${AccessibilityEvent.eventTypeToString(event.eventType)}, pkg=$packageName, reason=own_package")
+            return
+        }
+
+        if (event.eventType !in RELEVANT_EVENT_TYPES) {
+            return
+        }
+
         val className = event.className?.toString()
         val eventTypeString = AccessibilityEvent.eventTypeToString(event.eventType)
 
-        Log.d(TAG, "Accessibility Event [$eventTypeString] App Context: $packageName ($className)")
+        safeLogD(TAG, "Accessibility Event [$eventTypeString] App Context: $packageName ($className)")
         handleTeachingEvent(event, packageName, className, eventTypeString)
     }
 
@@ -77,9 +125,11 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         val windowId = rootNode.windowId
 
         return try {
-            if (TeachingPrivacyGuard.blocks(rootNode)) null
-            else UiNodeNormalizer.normalizeState(rootNode, packageName, windowId)
-        } finally { rootNode.recycle() }
+            UiNodeNormalizer.normalizeState(rootNode, packageName, windowId)
+        } finally {
+            @Suppress("DEPRECATION")
+            rootNode.recycle()
+        }
     }
 
     /**
@@ -88,10 +138,10 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
     fun logCurrentUiHierarchy() {
         val uiState = captureCurrentUiState()
         if (uiState == null) {
-            Log.w(TAG, "Unable to capture active UI hierarchy (rootInActiveWindow was null).")
+            safeLogW(TAG, "Unable to capture active UI hierarchy (rootInActiveWindow was null).")
             return
         }
-        Log.i(TAG, "=== UI Hierarchy Dump [App: ${uiState.appContext}, Elements: ${uiState.allElements.size}] ===")
+        safeLogI(TAG, "=== UI Hierarchy Dump [App: ${uiState.appContext}, Elements: ${uiState.allElements.size}] ===")
 
     }
 
@@ -101,24 +151,97 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         className: String?,
         eventTypeString: String
     ) {
-        val timestamp = System.currentTimeMillis()
-        val root = rootInActiveWindow ?: return
-        try {
-            if (root.packageName?.toString() != packageName) return
-            if (event.isPassword || TeachingPrivacyGuard.blocks(root)) {
-                teachingWarning = "Teaching capture paused at a credential boundary. Stop teaching; continue manually."
-                return
-            }
-        } finally { root.recycle() }
-        val sourceNode = event.source ?: return
+        val isUserInteraction = event.eventType in USER_INTERACTION_EVENT_TYPES
+        val sourceNode = try { event.source } catch (e: Exception) { null }
+        val isTargetProtected = if (sourceNode != null && isUserInteraction) {
+            TeachingPrivacyGuard.isSensitiveCredentialTarget(sourceNode)
+        } else false
+
         val targetElement = try {
-            if (TeachingPrivacyGuard.blocks(sourceNode)) {
-                teachingWarning = "Teaching capture paused at a credential boundary."
-                return
-            }
-            UiNodeNormalizer.normalizeNode(sourceNode)
-        } finally { sourceNode.recycle() }
-        capturedPackage = packageName
+            if (!isTargetProtected) {
+                sourceNode?.let { UiNodeNormalizer.normalizeNode(it) }
+            } else null
+        } catch (e: Exception) {
+            null
+        } finally {
+            try {
+                @Suppress("DEPRECATION")
+                sourceNode?.recycle()
+            } catch (e: Exception) {}
+        }
+
+        val eventText = try {
+            event.text.firstOrNull()?.toString()
+        } catch (e: Exception) {
+            null
+        }
+
+        val eventContentDesc = try {
+            event.contentDescription?.toString()
+        } catch (e: Exception) {
+            null
+        }
+
+        val currentUiState = captureCurrentUiState()
+
+        recordNormalizedTeachingEvent(
+            eventType = event.eventType,
+            eventTypeString = eventTypeString,
+            packageName = packageName,
+            className = className,
+            targetElement = targetElement,
+            isPassword = event.isPassword,
+            isTargetProtected = isTargetProtected,
+            eventText = eventText,
+            eventContentDescription = eventContentDesc,
+            capturedUiState = currentUiState
+        )
+    }
+
+    internal fun recordNormalizedTeachingEvent(
+        eventType: Int,
+        eventTypeString: String,
+        packageName: String,
+        className: String?,
+        targetElement: UiElement?,
+        isPassword: Boolean = false,
+        isTargetProtected: Boolean = false,
+        eventText: String? = null,
+        eventContentDescription: String? = null,
+        capturedUiState: UiState? = null
+    ): Boolean {
+        val ownPackage = getServicePackageName()
+        if (packageName == ownPackage) {
+            safeLogD(CAPTURE_TAG, "Rejected: type=$eventTypeString, pkg=$packageName, reason=own_package")
+            return false
+        }
+
+        if (!TeachingSessionManager.isTeachingActive()) {
+            safeLogD(CAPTURE_TAG, "Rejected: type=$eventTypeString, pkg=$packageName, reason=teaching_inactive")
+            return false
+        }
+
+        if (teachingWarning != null) {
+            safeLogD(CAPTURE_TAG, "Rejected: type=$eventTypeString, pkg=$packageName, reason=paused_at_credential_boundary")
+            return false
+        }
+
+        if (isPassword) {
+            teachingWarning = "Teaching capture paused at a credential boundary. Stop teaching; continue manually."
+            safeLogD(CAPTURE_TAG, "Rejected: type=$eventTypeString, pkg=$packageName, reason=password_event")
+            return false
+        }
+
+        val isUserInteraction = eventType in USER_INTERACTION_EVENT_TYPES
+        val isTargetElementSensitive = isUserInteraction && TeachingPrivacyGuard.isSensitiveTargetElement(targetElement)
+
+        if (isUserInteraction && (isTargetProtected || isTargetElementSensitive)) {
+            teachingWarning = "Teaching capture paused at a credential boundary."
+            safeLogD(CAPTURE_TAG, "Rejected: type=$eventTypeString, pkg=$packageName, reason=credential_target_element")
+            return false
+        }
+
+        val timestamp = System.currentTimeMillis()
 
         val uiEvent = UiEvent(
             schemaVersion = "1.0",
@@ -132,14 +255,12 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
 
         TeachingSessionManager.recordUiEvent(uiEvent)
 
-        val currentUiState = captureCurrentUiState()
-        if (currentUiState != null) {
-            TeachingSessionManager.recordUiState(currentUiState)
+        if (capturedUiState != null) {
+            TeachingSessionManager.recordUiState(capturedUiState)
         }
 
-        // Action Detection based on Accessibility Event Type
-        val actionType = when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> if (targetElement.isEditable) null else "CLICK"
+        val actionType = when (eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> if (targetElement?.isEditable == true) null else "CLICK"
             AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "LONG_PRESS"
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> "INPUT_TEXT"
             else -> null
@@ -147,19 +268,19 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
 
         if (actionType != null) {
             val inputData = if (actionType == "INPUT_TEXT") {
-                targetElement.text
+                targetElement?.text ?: eventText
             } else {
                 null
             }
 
             val selector = SemanticSelector(
                 schemaVersion = "1.0",
-                role = targetElement.role,
-                text = targetElement.text,
-                contentDescription = targetElement.contentDescription,
-                resourceId = targetElement.resourceId,
-                parentRole = targetElement.parentRole,
-                ancestorRole = targetElement.ancestorRole
+                role = targetElement?.role ?: className?.substringAfterLast('.'),
+                text = targetElement?.text ?: eventText,
+                contentDescription = targetElement?.contentDescription ?: eventContentDescription,
+                resourceId = targetElement?.resourceId,
+                parentRole = targetElement?.parentRole,
+                ancestorRole = targetElement?.ancestorRole
             )
 
             val actionEvent = ActionEvent(
@@ -168,14 +289,14 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
                 timestamp = timestamp,
                 actionType = actionType,
                 semanticSelector = selector,
-                inputData = inputData
+                inputData = inputData,
+                packageName = packageName
             )
 
             TeachingSessionManager.recordActionEvent(actionEvent)
 
-            // Before / After State capture
             val before = previousUiState
-            val after = currentUiState
+            val after = capturedUiState
             if (before != null && after != null) {
                 val stateEvent = StateEvent(
                     schemaVersion = "1.0",
@@ -189,12 +310,18 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
             }
         }
 
-        previousUiState = currentUiState
+        if (capturedUiState != null) {
+            previousUiState = capturedUiState
+        }
+
+        val totalTraceEvents = TeachingSessionManager.peekSessionTrace()?.traceEvents?.size ?: 0
+        safeLogD(CAPTURE_TAG, "Accepted: type=$eventTypeString, pkg=$packageName, traceCount=$totalTraceEvents")
+        return true
     }
 
     override fun onInterrupt() {
         isRuntimeReady = false
-        Log.w(TAG, "TeachableVoiceAccessibilityService interrupted.")
+        safeLogW(TAG, "TeachableVoiceAccessibilityService interrupted.")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -206,6 +333,6 @@ class TeachableVoiceAccessibilityService : AccessibilityService() {
         isRuntimeReady = false
         super.onDestroy()
         instance = null
-        Log.i(TAG, "TeachableVoiceAccessibilityService destroyed.")
+        safeLogI(TAG, "TeachableVoiceAccessibilityService destroyed.")
     }
 }

@@ -11,5 +11,6 @@ data class ActionEvent(
     val actionType: String, // e.g. CLICK, TYPE, SCROLL, LONG_PRESS
     val semanticSelector: SemanticSelector,
     val inputData: String? = null,
-    val eventType: EventType = EventType.ACTION
+    val eventType: EventType = EventType.ACTION,
+    val packageName: String? = null
 )
