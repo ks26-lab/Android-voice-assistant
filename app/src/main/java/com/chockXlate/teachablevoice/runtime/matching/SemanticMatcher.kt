@@ -76,6 +76,12 @@ class SemanticMatcher(private val config: MatchConfig = MatchConfig()) {
         field("ancestorRole", s.ancestorRole, e.ancestorRole, 0.03)
         field("nearbyText", s.nearbyText, e.nearbyText, 0.05)
         field("relativePosition", s.relativePosition, e.relativePosition, 0.01)
+        if (!anchor && s.resourceId.isNullOrBlank() && s.text.isNullOrBlank() && s.contentDescription.isNullOrBlank()) {
+            val isInputRole = e.role.equals("EditText", ignoreCase = true) || e.role.endsWith("EditText", ignoreCase = true)
+            if (isInputRole && e.isEditable && s.role?.equals(e.role, ignoreCase = true) == true) {
+                anchor = true
+            }
+        }
         if (contradiction || total == 0.0 || earned == 0.0) return null
         val confidence = (earned / total).let { if (anchor) it else minOf(it, 0.6) }
         return CandidateMatch(e, confidence, evidence)

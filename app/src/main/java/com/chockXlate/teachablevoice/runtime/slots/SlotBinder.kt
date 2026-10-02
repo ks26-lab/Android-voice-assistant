@@ -91,16 +91,14 @@ object SlotBinder {
             fun inputIdentity(sel: SemanticSelector): SemanticSelector {
                 val bound = selector(sel, inputTarget)
                 // A learned input value is not the identity of an empty field on the next run.
-                return if (inputTarget && bound.text == textValues.firstOrNull() &&
-                    (!bound.resourceId.isNullOrBlank() || !bound.contentDescription.isNullOrBlank())) bound.copy(text = null)
-                else bound
+                return if (inputTarget) bound.copy(text = null) else bound
             }
             val single = BoundStep(
                 source = step,
                 action = action,
                 selector = inputIdentity(step.semanticSelector),
                 preconditions = step.preconditions.copy(requiredElementPresent = step.preconditions.requiredElementPresent?.let {
-                    if (it == step.semanticSelector) inputIdentity(it) else selector(it)
+                    if (inputTarget || it == step.semanticSelector) inputIdentity(it) else selector(it)
                 }),
                 transition = step.expectedTransition.copy(
                     expectedElementAppeared = step.expectedTransition.expectedElementAppeared?.let { selector(it) },

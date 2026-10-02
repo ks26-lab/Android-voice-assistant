@@ -670,4 +670,246 @@ class TargetAppHandoffAndResumeTest {
         assertEquals(ExecutionState.COMPLETED, report2.result.finalState)
         assertEquals(1, driver.actionsDispatched)
     }
+
+    // 18. Multi-tick handoff where package appears before view hierarchy stabilizes
+    @Test
+    fun test18_handoffStabilizationMultiTickHierarchy() {
+        val slot = WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "headphones", provenance = "variable")
+        val sel = SemanticSelector(role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", textSlot = "\${item}")
+        val step = WorkflowStep(
+            stepId = "step_search_input",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = sel,
+            parameters = mapOf("input_parameter" to "\${item}"),
+            preconditions = Preconditions(fromState = "INITIAL_STATE", requiredPackage = targetPackage, requiredElementPresent = sel),
+            expectedTransition = ExpectedTransition(
+                fromState = "INITIAL_STATE",
+                toState = "state_after_input",
+                expectedEvidence = listOf(
+                    StateEvidenceRequirement(
+                        type = EvidenceType.TEXT_EQUALS,
+                        selector = sel,
+                        expectedValue = "\${item}",
+                        description = "Field contains entered text"
+                    )
+                )
+            )
+        )
+        val wf = Workflow(
+            skillId = "skill_search_multi_tick",
+            name = "Search Item",
+            intent = "search_information",
+            appContext = targetPackage,
+            slots = listOf(slot),
+            steps = listOf(step)
+        )
+
+        val driver = TestDriver(ui(UiElement(elementId = "assistant_root", role = "View"), packageName = assistantPackage))
+        var ticks = 0
+        driver.waitingHook = {
+            ticks++
+            when (ticks) {
+                1 -> {
+                    // Tick 1: Package switched, but window hierarchy is still blank/animating
+                    driver.screen = ui(packageName = targetPackage) // Empty elements
+                }
+                2 -> {
+                    // Tick 2: Search box has inflated and stabilized
+                    driver.screen = ui(
+                        UiElement(elementId = "search_box", role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", isEditable = true),
+                        packageName = targetPackage
+                    )
+                }
+            }
+        }
+
+        val engine = ExecutionEngine(Store(wf), driver, maxPackageWaitAttempts = 10, packagePollIntervalMs = 10)
+        val report = runSync {
+            engine.execute(ExecutionRequest(executionId = "exec_stabilization", skillId = "skill_search_multi_tick", boundSlots = mapOf("item" to "phone case")))
+        }
+
+        assertTrue("Execution must succeed after multi-tick stabilization: ${report.result.errorMessage}", report.result.success)
+        assertEquals(ExecutionState.COMPLETED, report.result.finalState)
+        assertEquals(1, driver.actionsDispatched)
+        assertEquals("phone case", driver.lastInputText)
+    }
+
+    // 19. Variable INPUT_TEXT replay with changed slot value and pre/post action verification
+    @Test
+    fun test19_variableInputTextReplayWithChangedSlotValue() {
+        val slot = WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "headphones", provenance = "variable")
+        val sel = SemanticSelector(role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", textSlot = "\${item}")
+        val step = WorkflowStep(
+            stepId = "step_search_input",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = sel,
+            parameters = mapOf("input_parameter" to "\${item}"),
+            preconditions = Preconditions(fromState = "INITIAL_STATE", requiredPackage = targetPackage, requiredElementPresent = sel),
+            expectedTransition = ExpectedTransition(
+                fromState = "INITIAL_STATE",
+                toState = "state_1",
+                expectedEvidence = listOf(
+                    StateEvidenceRequirement(
+                        type = EvidenceType.TEXT_EQUALS,
+                        selector = sel,
+                        expectedValue = "\${item}",
+                        description = "Field contains replayed text"
+                    )
+                )
+            )
+        )
+        val wf = Workflow(
+            skillId = "skill_changed_slot",
+            name = "Search Item",
+            intent = "search_information",
+            appContext = targetPackage,
+            slots = listOf(slot),
+            steps = listOf(step)
+        )
+
+        // Starting state on live UI has empty text (neither "headphones" nor "phone case")
+        val driver = TestDriver(ui(
+            UiElement(elementId = "search_box", role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", text = "", isEditable = true),
+            packageName = targetPackage
+        ))
+
+        val engine = ExecutionEngine(Store(wf), driver)
+        val report = runSync {
+            engine.execute(ExecutionRequest(executionId = "exec_changed_slot", skillId = "skill_changed_slot", boundSlots = mapOf("item" to "phone case")))
+        }
+
+        assertTrue("Execution must succeed when slot value changes from headphones to phone case: ${report.result.errorMessage}", report.result.success)
+        assertEquals(ExecutionState.COMPLETED, report.result.finalState)
+        assertEquals(1, driver.actionsDispatched)
+        assertEquals("phone case", driver.lastInputText)
+    }
+
+    // 20. Truly wrong starting state within target package must still fail closed
+    @Test
+    fun test20_trulyWrongStartingStateWithinTargetPackageFailsClosed() {
+        val slot = WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "headphones", provenance = "variable")
+        val sel = SemanticSelector(role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", textSlot = "\${item}")
+        val step = WorkflowStep(
+            stepId = "step_search_input",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = sel,
+            parameters = mapOf("input_parameter" to "\${item}"),
+            preconditions = Preconditions(fromState = "INITIAL_STATE", requiredPackage = targetPackage, requiredElementPresent = sel),
+            expectedTransition = ExpectedTransition(expectedEvidence = listOf(StateEvidenceRequirement(type = EvidenceType.GENERIC_STATE_CHANGE)))
+        )
+        val wf = Workflow(
+            skillId = "skill_wrong_screen",
+            name = "Search Item",
+            intent = "search_information",
+            appContext = targetPackage,
+            slots = listOf(slot),
+            steps = listOf(step)
+        )
+
+        // Target package is foreground, but screen is wrong (e.g. Settings list without search_box)
+        val driver = TestDriver(ui(
+            UiElement(elementId = "text_settings", role = "TextView", text = "Settings"),
+            UiElement(elementId = "btn_back", role = "Button", text = "Back"),
+            packageName = targetPackage
+        ))
+
+        val engine = ExecutionEngine(Store(wf), driver, maxPackageWaitAttempts = 3, packagePollIntervalMs = 10)
+        val report = runSync {
+            engine.execute(ExecutionRequest(executionId = "exec_wrong_screen", skillId = "skill_wrong_screen", boundSlots = mapOf("item" to "phone case")))
+        }
+
+        assertFalse("Execution on wrong screen must fail closed", report.result.success)
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.result.finalState)
+        assertEquals(0, driver.actionsDispatched)
+        assertTrue(
+            "Error message must indicate starting state evidence failure: ${report.result.errorMessage}",
+            report.result.errorMessage!!.contains("declared starting state has no matching observed semantic evidence")
+        )
+    }
+
+    // 21. Transient focus and selection differences do not block execution
+    @Test
+    fun test21_transientFocusAndSelectionDifferencesDoNotBlockExecution() {
+        val slot = WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "headphones", provenance = "variable")
+        val sel = SemanticSelector(role = "EditText", resourceId = "com.google.android.googlequicksearchbox:id/search_box", textSlot = "\${item}")
+        val step = WorkflowStep(
+            stepId = "step_search_input",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = sel,
+            parameters = mapOf("input_parameter" to "\${item}"),
+            preconditions = Preconditions(fromState = "INITIAL_STATE", requiredPackage = targetPackage, requiredElementPresent = sel),
+            expectedTransition = ExpectedTransition(expectedEvidence = listOf(StateEvidenceRequirement(type = EvidenceType.GENERIC_STATE_CHANGE)))
+        )
+        val wf = Workflow(
+            skillId = "skill_transient_diff",
+            name = "Search Item",
+            intent = "search_information",
+            appContext = targetPackage,
+            slots = listOf(slot),
+            steps = listOf(step)
+        )
+
+        // Live element has isSelected = false, isChecked = false, text = null
+        val driver = TestDriver(ui(
+            UiElement(
+                elementId = "search_box_unfocused",
+                role = "EditText",
+                resourceId = "com.google.android.googlequicksearchbox:id/search_box",
+                text = null,
+                isEditable = true,
+                isSelected = false,
+                isChecked = false
+            ),
+            packageName = targetPackage
+        ))
+
+        val engine = ExecutionEngine(Store(wf), driver)
+        val report = runSync {
+            engine.execute(ExecutionRequest(executionId = "exec_transient", skillId = "skill_transient_diff", boundSlots = mapOf("item" to "phone case")))
+        }
+
+        assertTrue("Execution must succeed despite transient focus/selection: ${report.result.errorMessage}", report.result.success)
+        assertEquals(ExecutionState.COMPLETED, report.result.finalState)
+        assertEquals(1, driver.actionsDispatched)
+    }
+
+    // 22. Role-only EditText input target resolves without ambiguity
+    @Test
+    fun test22_roleOnlyEditTextInputTargetResolvesWithoutAmbiguity() {
+        val slot = WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "headphones", provenance = "variable")
+        // Selector has only role = "EditText", no resourceId (as in physical reproduction test22)
+        val sel = SemanticSelector(role = "EditText", textSlot = "\${item}")
+        val step = WorkflowStep(
+            stepId = "step_search_input",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = sel,
+            parameters = mapOf("input_parameter" to "\${item}"),
+            preconditions = Preconditions(fromState = "INITIAL_STATE", requiredPackage = targetPackage, requiredElementPresent = sel),
+            expectedTransition = ExpectedTransition(expectedEvidence = listOf(StateEvidenceRequirement(type = EvidenceType.GENERIC_STATE_CHANGE)))
+        )
+        val wf = Workflow(
+            skillId = "skill_role_only",
+            name = "Search Item",
+            intent = "search_information",
+            appContext = targetPackage,
+            slots = listOf(slot),
+            steps = listOf(step)
+        )
+
+        // Single unique editable EditText on the target screen
+        val driver = TestDriver(ui(
+            UiElement(elementId = "unique_search_box", role = "EditText", text = "", isEditable = true),
+            packageName = targetPackage
+        ))
+
+        val engine = ExecutionEngine(Store(wf), driver)
+        val report = runSync {
+            engine.execute(ExecutionRequest(executionId = "exec_role_only", skillId = "skill_role_only", boundSlots = mapOf("item" to "phone case")))
+        }
+
+        assertTrue("Unique role-only EditText must resolve cleanly: ${report.result.errorMessage}", report.result.success)
+        assertEquals(ExecutionState.COMPLETED, report.result.finalState)
+        assertEquals(1, driver.actionsDispatched)
+        assertEquals("phone case", driver.lastInputText)
+    }
 }

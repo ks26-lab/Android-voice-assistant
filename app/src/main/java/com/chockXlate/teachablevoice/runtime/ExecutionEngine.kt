@@ -645,7 +645,10 @@ class ExecutionEngine(
                             if (nextObs != null && nextObs.state.appContext == expectedPackage && !isOwnApp(nextObs.state.appContext)) {
                                 before = nextObs
                                 targetActive = true
-                                break
+                                val preErr = preconditions.evaluate(step.preconditions, nextObs, workflow.appContext, step.stateEvidence)
+                                if (preErr == null) {
+                                    break
+                                }
                             }
                         }
 
@@ -670,8 +673,13 @@ class ExecutionEngine(
 
                     if (before == null) return finish(ExecutionState.PAUSED_FOR_HANDOFF, "No inspectable active window is available.")
                     runGate.check(workflow.safetyBoundary, before, step)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
-                    preconditions.evaluate(step.preconditions, before, workflow.appContext, step.stateEvidence)?.let {
-                        return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
+                    val preCheck = preconditions.evaluate(step.preconditions, before, workflow.appContext, step.stateEvidence)
+                    if (preCheck != null) {
+                        if (attempt < recovery.retryLimit(step.source.recoveryPolicy)) {
+                            driver.awaitChange(step.source.recoveryPolicy.retryDelayMs.coerceAtLeast(packagePollIntervalMs))
+                            continue
+                        }
+                        return finish(ExecutionState.PAUSED_FOR_HANDOFF, preCheck)
                     }
                     verifier.startingStateError(step, before)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
 
