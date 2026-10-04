@@ -6,6 +6,7 @@ import com.chockXlate.teachablevoice.skill.repository.SkillRepository
 import com.chockXlate.teachablevoice.skill.validation.ValidationSeverity
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
+import com.chockXlate.teachablevoice.runtime.cache.WorkflowRuntimeCache
 
 /**
  * Deterministic Semantic Skill Matcher for Phase 4.2.
@@ -43,24 +44,10 @@ class SkillMatcher(
             )
         }
 
-        if (understandingResult.status.startsWith("UNKNOWN") || understandingResult.intent.canonicalName.equals("unknown", ignoreCase = true)) {
-            diagnostics.add("Command has unknown intent. No matching skill can be selected.")
-            return SkillMatchResult(
-                schemaVersion = "1.0",
-                status = SkillMatchStatus.UNKNOWN,
-                commandText = understandingResult.rawCommand,
-                intent = understandingResult.intent.canonicalName,
-                candidates = emptyList(),
-                selectedSkillId = null,
-                selectedVersion = null,
-                diagnostics = diagnostics,
-                overallConfidence = 0.0,
-                selectedWorkflow = null
-            )
-        }
+        // Allow fallback to direct text matching against repository even if intent is UNKNOWN.
 
         // 2. Query Skill Store for stored workflows
-        val rawWorkflows = repository.getAllWorkflows()
+        val rawWorkflows = WorkflowRuntimeCache.getAll()
 
         if (rawWorkflows.isEmpty()) {
             diagnostics.add("Skill store is empty. No learned skills available.")
@@ -99,10 +86,17 @@ class SkillMatcher(
 
             val wfIntent = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy
                 .canonicalizeIntent(workflow.intent).lowercase().trim()
-            val isIntentMatch = (wfIntent == cmdIntentCanonical)
+            val wfName = workflow.name.lowercase().trim()
+            val cmdRaw = understandingResult.normalizedCommand
+
+            val isIntentMatch = (wfIntent == cmdIntentCanonical && cmdIntentCanonical != "unknown") ||
+                                (wfName.isNotEmpty() && cmdRaw.contains(wfName)) ||
+                                (wfIntent.isNotEmpty() && cmdRaw.contains(wfIntent)) ||
+                                (cmdRaw.isNotEmpty() && wfName.contains(cmdRaw)) ||
+                                (cmdRaw.isNotEmpty() && wfIntent.contains(cmdRaw))
 
             if (!isIntentMatch) {
-                diagnostics.add("Workflow '${workflow.skillId}' excluded: Intent mismatch ('$wfIntent' vs '$cmdIntentCanonical')")
+                diagnostics.add("Workflow '${workflow.skillId}' excluded: No intent or text match ('$wfIntent', '$wfName' vs '$cmdRaw')")
                 candidateMatches.add(
                     SkillCandidateMatch(
                         skillId = workflow.skillId,
@@ -303,6 +297,14 @@ class SkillMatcher(
         val sortedAllCandidates = candidateMatches.sortedWith(
             compareByDescending<SkillCandidateMatch> { it.score }.thenBy { it.skillId }
         )
+
+        println("[WORKFLOW][MATCH]")
+        println("COMMAND=${understandingResult.rawCommand}")
+        println("INTENT=${understandingResult.intent.canonicalName}")
+        println("CANDIDATES=${sortedAllCandidates.joinToString { it.skillId + "(score=" + it.score + ")" }}")
+        println("SELECTED_WORKFLOW_ID=$selectedSkillId")
+        println("MATCH_SCORE=${sortedAllCandidates.firstOrNull { it.skillId == selectedSkillId }?.score ?: 0.0}")
+        println("MATCH_REASON=${diagnostics.lastOrNull() ?: "No matching reason"}")
 
         return SkillMatchResult(
             schemaVersion = "1.0",

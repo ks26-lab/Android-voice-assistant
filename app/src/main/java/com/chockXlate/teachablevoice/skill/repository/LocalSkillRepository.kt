@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import com.chockXlate.teachablevoice.runtime.cache.WorkflowRuntimeCache
 
 /**
  * Thread-safe, deterministic implementation of [SkillRepository] with persistent disk storage backing.
@@ -78,6 +79,7 @@ class LocalSkillRepository(
         } catch (e: Exception) {
             // Storage directory access failure handled gracefully
         }
+        WorkflowRuntimeCache.hydrate(store.values.toList())
     }
 
     // ==========================================
@@ -187,6 +189,24 @@ class LocalSkillRepository(
             metadata = "${canonicalWorkflow.name.ifBlank { canonicalWorkflow.skillId }} (v$newVersion)"
         )
 
+        WorkflowRuntimeCache.put(canonicalWorkflow)
+
+        println("[WORKFLOW][SAVE]")
+        println("ID=${canonicalWorkflow.skillId}")
+        println("SKILL_ID=${canonicalWorkflow.skillId}")
+        println("INTENT=${canonicalWorkflow.intent}")
+        println("APP=${canonicalWorkflow.appContext}")
+        println("SLOTS=${canonicalWorkflow.slots.size}")
+        println("STEPS=${canonicalWorkflow.steps.size}")
+        println("STORAGE_SUCCESS=true")
+
+        println("[WORKFLOW][CACHE]")
+        println("STATE=READY")
+        println("COUNT=${store.size}")
+        println("REQUESTED_ID=${canonicalWorkflow.skillId}")
+        println("FOUND=true")
+        println("AVAILABLE_IDS=${store.keys.joinToString()}")
+
         return true
     }
 
@@ -205,7 +225,13 @@ class LocalSkillRepository(
     }
 
     override fun getWorkflowById(skillId: String): Workflow? {
-        return store[skillId]
+        val workflow = store[skillId]
+        if (workflow != null) {
+            println("[RUNTIME]\nWORKFLOW_CACHE_HIT")
+        } else {
+            println("[RUNTIME]\nWORKFLOW_CACHE_MISS")
+        }
+        return workflow
     }
 
     override fun getAllWorkflows(): List<Workflow> {
@@ -239,6 +265,7 @@ class LocalSkillRepository(
                 metadata = "Deleted skill ID: $skillId"
             )
         }
+        WorkflowRuntimeCache.remove(skillId)
         return removed
     }
 

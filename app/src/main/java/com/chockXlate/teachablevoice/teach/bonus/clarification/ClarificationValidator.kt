@@ -74,7 +74,7 @@ class ClarificationValidator {
                     ValidationResult(isValid = false, errorMessage = "Expected boolean true/false.")
                 }
             }
-            SlotType.TEXT, SlotType.ENUM, SlotType.ADDRESS -> {
+            SlotType.TEXT, SlotType.ENUM, SlotType.ADDRESS, SlotType.PLATFORM -> {
                 ValidationResult(isValid = true, validatedValue = trimmed)
             }
         }

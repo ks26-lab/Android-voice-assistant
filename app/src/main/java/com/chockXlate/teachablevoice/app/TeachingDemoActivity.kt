@@ -651,12 +651,14 @@ class TeachingDemoActivity : Activity() {
             com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> "STATUS: PHASE 11 SKILL MATCHED ('${matchResult.selectedSkillId}')"
             com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.AMBIGUOUS -> "STATUS: PHASE 11 SKILL MATCH AMBIGUOUS (${matchResult.candidates.size} candidates). Clarification needed."
             com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.UNKNOWN -> "STATUS: PHASE 11 SKILL MATCH UNKNOWN. Teaching required."
+            SkillMatchStatus.NEEDS_CLARIFICATION -> "STATUS: PHASE 11 SKILL MATCH NEEDS CLARIFICATION."
         }
         statusTextView.setTextColor(
             when (matchResult.status) {
                 com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.MATCHED -> Color.parseColor("#00E676")
                 com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.AMBIGUOUS -> Color.parseColor("#FFD600")
                 com.chockXlate.teachablevoice.command.matching.SkillMatchStatus.UNKNOWN -> Color.parseColor("#FF5252")
+                SkillMatchStatus.NEEDS_CLARIFICATION -> Color.parseColor("#FF9800")
             }
         )
 

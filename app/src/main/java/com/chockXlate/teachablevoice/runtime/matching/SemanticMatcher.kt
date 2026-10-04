@@ -241,6 +241,8 @@ class SemanticMatcher(private val config: MatchConfig = MatchConfig()) {
             RuntimeAction.INPUT_TEXT -> e.isEditable
             RuntimeAction.SCROLL -> e.isScrollable
             RuntimeAction.LONG_PRESS -> false // Requires live supported-action evidence.
+            RuntimeAction.BACK, RuntimeAction.SWIPE, RuntimeAction.HOME -> true
+            else -> false
         }
     }
 
@@ -253,6 +255,8 @@ class SemanticMatcher(private val config: MatchConfig = MatchConfig()) {
             RuntimeAction.INPUT_TEXT -> e.isEditable
             RuntimeAction.SCROLL -> e.isScrollable
             RuntimeAction.LONG_PRESS -> e.isClickable
+            RuntimeAction.BACK -> true
+            else -> false
         }
     }
 
@@ -316,18 +320,10 @@ class SemanticMatcher(private val config: MatchConfig = MatchConfig()) {
             (selectorPkg != null && elementPkg == null)
 
         fun hasSemanticOverlap(w: String, a: String): Boolean {
-            val wTokens = w.split(Regex("[^a-zA-Z0-9]+")).filter { it.length >= 3 }.toSet()
-            val aTokens = a.split(Regex("[^a-zA-Z0-9]+")).filter { it.length >= 3 }.toSet()
+            val wTokens = w.split(WORD_BOUNDARY_REGEX).filter { it.length >= 3 }.toSet()
+            val aTokens = a.split(WORD_BOUNDARY_REGEX).filter { it.length >= 3 }.toSet()
             if (wTokens.intersect(aTokens).isNotEmpty()) return true
-            val synonymGroups = listOf(
-                setOf("search", "find", "query", "lookup", "explore", "products", "dishes"),
-                setOf("order", "buy", "cart", "purchase", "checkout"),
-                setOf("food", "dish", "dishes", "restaurant", "restaurants", "meal"),
-                setOf("product", "products", "item", "items", "goods", "shirt", "clothing", "headphones"),
-                setOf("continue", "proceed", "next", "submit", "confirm", "done", "ok", "place order"),
-                setOf("address", "deliver", "delivery", "location")
-            )
-            return synonymGroups.any { group ->
+            return SYNONYM_GROUPS.any { group ->
                 wTokens.any { it in group } && aTokens.any { it in group }
             }
         }
@@ -473,6 +469,16 @@ class SemanticMatcher(private val config: MatchConfig = MatchConfig()) {
     }
 
     companion object {
+        private val WORD_BOUNDARY_REGEX = Regex("[^a-zA-Z0-9]+")
+        private val SYNONYM_GROUPS = listOf(
+            setOf("search", "find", "query", "lookup", "explore", "products", "dishes"),
+            setOf("order", "buy", "cart", "purchase", "checkout"),
+            setOf("food", "dish", "dishes", "restaurant", "restaurants", "meal"),
+            setOf("product", "products", "item", "items", "goods", "shirt", "clothing", "headphones"),
+            setOf("continue", "proceed", "next", "submit", "confirm", "done", "ok", "place order"),
+            setOf("address", "deliver", "delivery", "location")
+        )
+        
         fun normalize(value: String): String = value.trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")
     }
 }

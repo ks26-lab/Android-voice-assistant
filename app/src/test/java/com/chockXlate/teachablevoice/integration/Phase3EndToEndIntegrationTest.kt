@@ -326,7 +326,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e5", "skill_exact_run", boundParameters = mapOf("item" to "book")))
+        val report = engine.execute(ExecutionRequest("e5", "skill_exact_run", boundSlots = mapOf("item" to "book")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("book", driver.lastExecutedAction?.inputText)
@@ -359,7 +359,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e6", "skill_item_var", boundParameters = mapOf("product" to "tea")))
+        val report = engine.execute(ExecutionRequest("e6", "skill_item_var", boundSlots = mapOf("product" to "tea")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals(1, driver.executedActionsCount)
@@ -392,7 +392,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e7", "skill_qty_var", boundParameters = mapOf("quantity" to "10")))
+        val report = engine.execute(ExecutionRequest("e7", "skill_qty_var", boundSlots = mapOf("quantity" to "10")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("10", driver.lastExecutedAction?.inputText)
@@ -425,7 +425,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e8", "skill_addr_var", boundParameters = mapOf("address" to "221B Baker St")))
+        val report = engine.execute(ExecutionRequest("e8", "skill_addr_var", boundSlots = mapOf("address" to "221B Baker St")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("221B Baker St", driver.lastExecutedAction?.inputText)
@@ -555,7 +555,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e14", "skill_type_text", boundParameters = mapOf("note" to "Updated Note Content")))
+        val report = engine.execute(ExecutionRequest("e14", "skill_type_text", boundSlots = mapOf("note" to "Updated Note Content")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("Updated Note Content", driver.lastExecutedAction?.inputText)
@@ -588,7 +588,7 @@ class Phase3EndToEndIntegrationTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e15", "skill_type_qty", boundParameters = mapOf("count" to "7")))
+        val report = engine.execute(ExecutionRequest("e15", "skill_type_qty", boundSlots = mapOf("count" to "7")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("7", driver.lastExecutedAction?.inputText)
@@ -910,7 +910,7 @@ class Phase3EndToEndIntegrationTest {
 
         val engine = ExecutionEngine(repository, driver)
         // Request provides step1_param, omitting step2_param to trigger mid-flow pause
-        val report = engine.execute(ExecutionRequest("e25", "skill_midflow_pause", boundParameters = mapOf("step1_param" to "ValA")))
+        val report = engine.execute(ExecutionRequest("e25", "skill_midflow_pause", boundSlots = mapOf("step1_param" to "ValA")))
 
         assertEquals(ExecutionState.ASK, report.state)
         assertTrue(engine.isPaused)
@@ -958,7 +958,7 @@ class Phase3EndToEndIntegrationTest {
         }
 
         val engine = ExecutionEngine(repository, driver)
-        val initialReport = engine.execute(ExecutionRequest("e26", "skill_midflow_resume", boundParameters = mapOf("p1" to "FirstVal")))
+        val initialReport = engine.execute(ExecutionRequest("e26", "skill_midflow_resume", boundSlots = mapOf("p1" to "FirstVal")))
 
         assertEquals(ExecutionState.ASK, initialReport.state)
         assertTrue(engine.isPaused)

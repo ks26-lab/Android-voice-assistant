@@ -197,7 +197,7 @@ object WorkflowSynthesizer {
             intentName.contains("order", ignoreCase = true)
 
         if (isPortableTask && workflowSlots.none { it.isPlatformSlot() }) {
-            val demoDesc = trace.description ?: trace.skillName ?: ""
+            val demoDesc = trace.voiceEvents.lastOrNull()?.transcript ?: ""
             val platformFromDesc = Regex("""\b(?:from|on|through|via|using)\s+([A-Za-z0-9_-]+)""", RegexOption.IGNORE_CASE)
                 .find(demoDesc)?.groupValues?.get(1)?.trim()
             val inferredPlatform = when {
@@ -294,21 +294,25 @@ object WorkflowSynthesizer {
             // Check if input value matches a VARIABLE slot
             val matchingVarSlot = variableSlotNames.find { vSlot ->
                 val inf = inferenceResult.slotInferences.find { it.slotName == vSlot }
-                inf != null && inf.rawValues.any { rv -> rv.equals(inputVal.ifBlank { target?.text.orEmpty() }, ignoreCase = true) }
+                val slotInWf = workflowSlots.find { it.name == vSlot }
+                val valueToMatch = inputVal.ifBlank { target?.text.orEmpty() }
+                (inf != null && inf.rawValues.any { rv -> rv.equals(valueToMatch, ignoreCase = true) }) ||
+                (slotInWf != null && slotInWf.exampleValue.equals(valueToMatch, ignoreCase = true))
             }
+
+            val matchingConstSlot = if (!containsSensitiveKeyword) {
+                constantSlotNames.find { cSlot ->
+                    val inf = inferenceResult.slotInferences.find { it.slotName == cSlot }
+                    inf != null && inf.rawValues.any { rv -> rv.equals(inputVal, ignoreCase = true) }
+                }
+            } else null
 
             if (matchingVarSlot != null) {
                 textSlotRef = "\${$matchingVarSlot}"
                 selectorText = null // Parameterized variable step
-            } else if (!containsSensitiveKeyword) {
-                val matchingConstSlot = constantSlotNames.find { cSlot ->
-                    val inf = inferenceResult.slotInferences.find { it.slotName == cSlot }
-                    inf != null && inf.rawValues.any { rv -> rv.equals(inputVal, ignoreCase = true) }
-                }
-                if (matchingConstSlot != null || (selectorText == null && inputVal.isNotBlank())) {
-                    if (selectorText == null && inputVal.isNotBlank()) {
-                        selectorText = inputVal
-                    }
+            } else if (matchingConstSlot != null || (selectorText == null && inputVal.isNotBlank())) {
+                if (selectorText == null && inputVal.isNotBlank()) {
+                    selectorText = inputVal
                 }
             }
 
@@ -494,10 +498,23 @@ object WorkflowSynthesizer {
                 )
             }
 
+            val mappedAction = when (action.actionType.name) {
+                "INPUT_TEXT" -> "SET_TEXT"
+                "TAP" -> {
+                    val label = selector.text ?: selector.contentDescription ?: selector.resourceId ?: ""
+                    if (label.contains("search", ignoreCase = true)) "SEARCH"
+                    else if (label.equals("+") || label.contains("increment", true)) "INCREMENT"
+                    else if (label.equals("-") || label.contains("decrement", true)) "DECREMENT"
+                    else "CLICK"
+                }
+                "TOGGLE" -> "CLICK"
+                else -> action.actionType.name
+            }
+
             val step = WorkflowStep(
                 schemaVersion = "1.0",
                 stepId = stepId,
-                semanticAction = action.actionType.name,
+                semanticAction = mappedAction,
                 semanticSelector = selector,
                 parameters = params,
                 preconditions = preconditions,
@@ -506,6 +523,24 @@ object WorkflowSynthesizer {
                 confidence = action.confidence,
                 provenance = "Phase 3 SemanticAction ${action.actionId} (Voice: ${action.rawEventId ?: "none"})"
             )
+            
+            val slotName = matchingVarSlot ?: matchingConstSlot ?: "none"
+            val exVal = if (slotName != "none") {
+                val foundSlot = workflowSlots.find { it.name == slotName }
+                foundSlot?.exampleValue ?: inputVal.ifBlank { "none" }
+            } else {
+                if (inputVal.isNotBlank()) inputVal else "none"
+            }
+            
+            println("[ACTION][IDENTIFIED]")
+            println("action=${step.semanticAction}")
+            println("stepId=${step.stepId}")
+            println("target=${selector.text ?: selector.contentDescription ?: selector.resourceId ?: selector.role ?: "unknown"}")
+            println("slot=$slotName")
+            println("exampleValue=$exVal")
+            println("sourceEvent=${action.rawActionType}")
+            println("confidence=${action.confidence}")
+            
             workflowSteps.add(step)
         }
 
@@ -619,6 +654,36 @@ object WorkflowSynthesizer {
         val provDemoIds = (alignmentResult.alignedDemonstrationIds +
             inferenceResult.slotInferences.flatMap { it.demonstrationIds } +
             listOf(trace.traceId)).filter { it.isNotBlank() }.distinct()
+
+        println("========== LEARNED WORKFLOW ==========")
+        println("Workflow: ${workflow.intent}")
+        println()
+        if (workflow.slots.isNotEmpty()) {
+            println("Slots:")
+            workflow.slots.forEach { slot ->
+                println("- ${slot.name}")
+                println("  exampleValue = ${slot.exampleValue ?: "none"}")
+            }
+            println()
+        }
+        println("Actions:")
+        workflow.steps.forEachIndexed { i, step ->
+            println("${i + 1}. ${step.semanticAction}")
+            val targetStr = step.semanticSelector.text ?: step.semanticSelector.contentDescription ?: step.semanticSelector.resourceId ?: step.semanticSelector.role ?: "unknown"
+            println("   target = $targetStr")
+            val slotParam = step.parameters["input_parameter"]?.removePrefix("\${")?.removeSuffix("}")
+            if (slotParam != null) {
+                println("   slot = $slotParam")
+                val foundSlot = workflow.slots.find { it.name == slotParam }
+                if (foundSlot != null) {
+                    println("   exampleValue = ${foundSlot.exampleValue}")
+                }
+            } else if (step.parameters.containsKey("input_literal")) {
+                println("   exampleValue = ${step.parameters["input_literal"]}")
+            }
+            println()
+        }
+        println("=======================================")
 
         return WorkflowSynthesisResult(
             schemaVersion = "1.0",

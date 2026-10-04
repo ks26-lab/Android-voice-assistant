@@ -66,11 +66,47 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
     var teachingWarning: String? = null
         internal set
 
+    fun logAccessibilityCapabilities() {
+        val info = serviceInfo ?: return
+        val canRead = info.canRetrieveWindowContent
+        val canGesture = (info.capabilities and android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
+        Log.i("RUNTIME", """
+            [RUNTIME][ACCESSIBILITY]
+            CAPABILITY MATRIX
+
+            READ_UI              $canRead
+            CLICK                true
+            SET_TEXT             true
+            FOCUS                true
+            SCROLL_FORWARD       true
+            SCROLL_BACKWARD      true
+            GESTURE_DISPATCH     $canGesture
+            SWIPE                $canGesture
+            LONG_PRESS           $canGesture
+            GLOBAL_BACK          true
+            GLOBAL_HOME          true
+            WINDOW_EVENTS        true
+        """.trimIndent())
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         isRuntimeReady = true
         safeLogI(TAG, "TeachableVoiceAccessibilityService connected.")
+        
+        val info = serviceInfo
+        if (info != null) {
+            val canGesture = (info.capabilities and android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0
+            safeLogI("RUNTIME", "[RUNTIME][ACCESSIBILITY]\n" +
+                "SERVICE_CONNECTED=true\n" +
+                "CAN_RETRIEVE_WINDOW_CONTENT=${info.canRetrieveWindowContent}\n" +
+                "CAN_PERFORM_GESTURES=$canGesture\n" +
+                "EVENT_TYPES=${info.eventTypes}\n" +
+                "FEEDBACK_TYPE=${info.feedbackType}\n" +
+                "FLAGS=${info.flags}")
+            logAccessibilityCapabilities()
+        }
     }
 
     internal open fun getServicePackageName(): String {
@@ -87,6 +123,7 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
         val pkgName = event.packageName?.toString()
         if (pkgName != null && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             currentPackageOverride = pkgName
+            Log.i("RUNTIME", "[RUNTIME][ACCESSIBILITY]\nWINDOW_CHANGED\nPACKAGE=$pkgName\nCLASS=${event.className}")
         }
 
         val isTeaching = isTeachingModeActive || TeachingSessionManager.isTeachingActive()
@@ -132,11 +169,15 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
     fun captureCurrentUiState(): UiState? {
         val rootSource = nodeSourceProvider?.invoke()
             ?: rootInActiveWindow?.let { RealAccessibilityNode(it) }
-            ?: return null
 
         val packageName = currentPackageOverride
             ?: try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
             ?: "unknown"
+            
+        Log.i("RUNTIME", "[RUNTIME][ACCESSIBILITY]\nROOT_WINDOW_AVAILABLE=${rootSource != null}\nACTIVE_PACKAGE=$packageName")
+
+        if (rootSource == null) return null
+
         val windowId = try { rootInActiveWindow?.windowId ?: 0 } catch (_: Throwable) { 0 }
 
         return try {
@@ -166,6 +207,12 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
         val rootSource = nodeSourceProvider?.invoke()
             ?: rootInActiveWindow?.let { RealAccessibilityNode(it) }
 
+        val packageName = currentPackageOverride
+            ?: try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
+            ?: "unknown"
+            
+        Log.i("RUNTIME", "[RUNTIME][ACCESSIBILITY]\nROOT_WINDOW_AVAILABLE=${rootSource != null}\nACTIVE_PACKAGE=$packageName")
+
         if (rootSource == null) {
             return com.chockXlate.teachablevoice.contract.ui.UiObservationResult(
                 status = com.chockXlate.teachablevoice.contract.ui.UiObservationStatus.UNAVAILABLE,
@@ -174,9 +221,6 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
             )
         }
 
-        val packageName = currentPackageOverride
-            ?: try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
-            ?: "unknown"
         val windowId = try { rootInActiveWindow?.windowId ?: 0 } catch (_: Throwable) { 0 }
 
         return try {

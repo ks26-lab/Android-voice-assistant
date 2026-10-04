@@ -175,6 +175,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                         MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Multiple elements match appeared selector: ${label(sel)}.")
                         MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Element appearance match is weak: ${label(sel)}.")
                         MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Expected element did not appear: ${label(sel)}.")
+                        else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                     }
                 }
             }
@@ -198,6 +199,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Multiple elements match selector: ${label(sel)}.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target match is weak: ${label(sel)}.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Expected semantic element does not exist: ${label(sel)}.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                 }
             }
             EvidenceType.ELEMENT_NOT_EXISTS -> {
@@ -226,6 +228,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element for text verification is ambiguous: ${label(sel)}.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element match is weak for text verification: ${label(sel)}.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Target element for text verification was not found: ${label(sel)}.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                 }
             }
             EvidenceType.TEXT_CHANGED -> {
@@ -251,6 +254,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element for text change verification is ambiguous.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element match is weak for text change verification.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Target element for text change verification not found.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${afterMatch.status.name}")
                 }
             }
             EvidenceType.CHECKED_STATE -> {
@@ -269,6 +273,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element for checked state is ambiguous.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element match is weak for checked state.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Target element for checked state not found.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                 }
             }
             EvidenceType.SELECTED_STATE -> {
@@ -287,6 +292,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element for selected state is ambiguous.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Target element match is weak for selected state.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Target element for selected state not found.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                 }
             }
             EvidenceType.COUNTER_CHANGE -> {
@@ -320,6 +326,7 @@ class StateEvidenceEngine(private val matcher: SemanticMatcher = SemanticMatcher
                     MatchStatus.AMBIGUOUS -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Counter element is ambiguous.")
                     MatchStatus.WEAK -> EvidenceItemResult(req, EvidenceEvaluationStatus.UNCERTAIN, "Counter element match is weak.")
                     MatchStatus.NONE -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Counter element not found.")
+                    else -> EvidenceItemResult(req, EvidenceEvaluationStatus.FAILED, "Match status unsupported or sensitive: ${match.status.name}")
                 }
             }
             EvidenceType.GENERIC_STATE_CHANGE -> {

@@ -3,6 +3,7 @@ package com.chockXlate.teachablevoice.runtime
 import com.chockXlate.teachablevoice.contract.runtime.*
 import com.chockXlate.teachablevoice.contract.workflow.Preconditions
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
+import com.chockXlate.teachablevoice.contract.workflow.WorkflowStep
 import com.chockXlate.teachablevoice.contract.workflow.WorkflowSubtask
 import com.chockXlate.teachablevoice.execution.SemanticExecutor
 import com.chockXlate.teachablevoice.runtime.matching.MatchStatus
@@ -174,6 +175,38 @@ class ExecutionEngine(
             val resolution = resolver.resolve(request)
             val workflow = resolution.workflow ?: return finish(ExecutionState.FAILED, resolution.error)
             total = workflow.steps.size
+            
+            println("""
+[RUNTIME]
+WORKFLOW_EXECUTION_START
+
+Workflow ID: ${workflow.skillId}
+Skill ID: ${workflow.skillId}
+App Context: ${workflow.appContext}
+Step Count: $total
+            """.trimIndent())
+            
+            workflow.steps.forEachIndexed { i, s -> 
+                println("""
+[RUNTIME]
+STEP ${i+1}:
+action = ${s.semanticAction}
+target = ${s.semanticSelector.role}
+semantic target = ${s.semanticSelector.text ?: s.semanticSelector.contentDescription ?: s.semanticSelector.resourceId ?: "none"}
+                """.trimIndent())
+            }
+
+            println("""
+[RUNTIME]
+REQUEST_CREATED
+
+Workflow ID: ${workflow.skillId}
+Skill ID: ${request.skillId}
+Step Count: $total
+App Context: ${workflow.appContext}
+Slot bindings: ${request.boundSlots}
+            """.trimIndent())
+
             recorder.decision(
                 null, ExecutionState.INITIATED, DecisionType.PROCEED,
                 "Using current workflow content. The repository interface cannot verify the requested historical version."
@@ -288,8 +321,31 @@ class ExecutionEngine(
                 return finish(ExecutionState.WAITING_FOR_USER, clarReq.reason, clarReq)
             }
 
+            println("[EXECUTION][REQUEST_RECEIVED]")
+            println("EXECUTION_ID=${request.executionId}")
+            println("WORKFLOW_ID=${workflow.skillId}")
+            println("SKILL_ID=${request.skillId}")
+            println("SLOT_COUNT=${request.boundSlots.size}")
+            println("STEP_COUNT=${workflow.steps.size}")
+
+            println("[EXECUTION][WORKFLOW_LOADED]")
+            println("WORKFLOW_ID=${workflow.skillId}")
+            println("STEPS=${workflow.steps.size}")
+            println("SLOTS=${workflow.slots.size}")
+            println("APP_CONTEXT=${workflow.appContext}")
+
             val binding = SlotBinder.bind(workflow, currentSlots)
             binding.error?.let { return finish(ExecutionState.FAILED, it) }
+
+            println("[SLOT][BIND]")
+            println("EXECUTION_ID=${request.executionId}")
+            workflow.slots.forEach { slot ->
+                println("SLOT=${slot.name}")
+                println("EXAMPLE_VALUE=${slot.exampleValue}")
+                println("RUNTIME_VALUE=${request.boundSlots[slot.name]}")
+                println("BOUND_VALUE=${currentSlots[slot.name]}")
+            }
+
             total = binding.steps.size
             recorder.setBoundSlots(currentSlots)
             binding.steps.forEachIndexed { idx, st ->
@@ -335,7 +391,8 @@ class ExecutionEngine(
                 total = total,
                 currentSlots = currentSlots
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             runGate.block("Runtime observation or execution failed. Completion cannot be established safely.")
             return finish(if (cancelled) ExecutionState.ABORTED else ExecutionState.PAUSED_FOR_HANDOFF, runGate.reason())
         } finally {
@@ -645,7 +702,8 @@ class ExecutionEngine(
                 currentSlots = paused.boundSlots,
                 selectedCandidateIndex = selectedCandidateIndex
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             runGate.block("Runtime observation or execution failed upon resume.")
             return recorder.finish(
                 state = if (cancelled) ExecutionState.ABORTED else ExecutionState.PAUSED_FOR_HANDOFF,
@@ -777,6 +835,14 @@ class ExecutionEngine(
                     targetDescription = step.selector.text ?: step.selector.contentDescription ?: step.selector.resourceId ?: step.selector.role
                 )
 
+                println("[EXECUTION][STEP]")
+                println("EXECUTION_ID=${request.executionId}")
+                println("INDEX=$sIndex")
+                println("STEP_ID=${step.source.stepId}")
+                println("ACTION=${step.action.name}")
+                println("SELECTOR=${step.selector}")
+                println("PARAMETERS=${step.source.parameters}")
+
                 for (attempt in 0..recovery.retryLimit(step.source.recoveryPolicy)) {
                     blocked()?.let { return it }
                     if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service disconnected.")
@@ -822,25 +888,37 @@ class ExecutionEngine(
                             expectedPackage = expectedPackage
                         )
 
+                        android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] WAITING_FOR_TARGET_FOREGROUND")
                         val waitStart = System.currentTimeMillis()
                         var waitAttempts = 0
                         var targetActive = false
+                        var lastLoggedPackage: String? = null
 
                         while (waitAttempts < maxPackageWaitAttempts && (System.currentTimeMillis() - waitStart) <= maxPackageWaitMs) {
                             blocked()?.let { return it }
                             if (!driver.isReady()) return finish(ExecutionState.FAILED, "Accessibility service disconnected.")
-                            waitAttempts++
-                            driver.awaitChange(packagePollIntervalMs)
-                            blocked()?.let { return it }
-                            val nextObs = driver.observe()
-                            if (nextObs != null && nextObs.state.appContext == expectedPackage && !isOwnApp(nextObs.state.appContext)) {
-                                before = nextObs
+                            
+                            val activePkg = driver.getActivePackage()
+                            if (activePkg != null && activePkg != lastLoggedPackage) {
+                                android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] ACTIVE_PACKAGE=$activePkg")
+                                lastLoggedPackage = activePkg
+                            }
+                            
+                            if (activePkg != null && (activePkg == expectedPackage || isAppMatching(expectedPackage, activePkg)) && !isOwnApp(activePkg)) {
                                 targetActive = true
+                                android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] TARGET_FOREGROUND_CONFIRMED")
                                 break
                             }
+                            
+                            waitAttempts++
+                            driver.awaitChange(packagePollIntervalMs)
                         }
 
-                        if (!targetActive) {
+                        if (targetActive) {
+                            before = driver.observe()
+                        }
+
+                        if (!targetActive || before == null) {
                             val failureReason = if (before == null) "No inspectable active window is available."
                             else "The required app is not the active app. Open it before continuing."
                             return finish(ExecutionState.PAUSED_FOR_HANDOFF, failureReason)
@@ -859,6 +937,11 @@ class ExecutionEngine(
                         "Observing current UI and checking preconditions."
                     )
 
+                    println("[RUNTIME]\nSTEP ${sIndex + 1}/$total\nAction: ${step.action}\nTarget: ${step.selector.text ?: step.selector.contentDescription ?: step.selector.resourceId ?: step.selector.role ?: "unknown"}")
+                    
+                    if (step.action == RuntimeAction.INPUT_TEXT) {
+                        println("[RUNTIME][ACTION]\nSTEP=${sIndex + 1}/$total\nACTION=${step.action}\nTARGET=${step.selector.role ?: "unknown"}\nTEXT=${step.inputText ?: ""}")
+                    }
                     if (before == null) return finish(ExecutionState.PAUSED_FOR_HANDOFF, "No inspectable active window is available.")
                     runGate.check(workflow.safetyBoundary, before, step)?.let { blockReason ->
                         recorder.recordSafetyEvent(stepId, "BLOCKED", blockReason)
@@ -878,6 +961,7 @@ class ExecutionEngine(
                         )
                         return finish(ExecutionState.PAUSED_FOR_HANDOFF, blockReason)
                     }
+                    println("[RUNTIME]\nSTEP ${sIndex + 1} safety passed")
                     preconditions.evaluate(step.preconditions, before, workflow.appContext, step.stateEvidence)?.let {
                         return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
                     }
@@ -890,6 +974,7 @@ class ExecutionEngine(
                         confidence = match.best?.confidence ?: 0.0,
                         targetDescription = match.best?.let { "${it.element.role}: ${it.element.text ?: it.element.contentDescription ?: it.element.resourceId ?: ""}".trim() }
                     )
+                    println("[RUNTIME]\nSTEP ${sIndex + 1} target resolved (Status: ${match.status})")
 
                     var effectiveStep = step
                     val candidateList = listOfNotNull(match.best, match.second)
@@ -926,7 +1011,7 @@ class ExecutionEngine(
                             )
                         }
                         val candidateDescs = candidates.map { it.description }
-                        val targetTerm = step.selector.text ?: step.selector.role.ifBlank { "option" }
+                        val targetTerm = step.selector.text ?: step.selector.role?.ifBlank { "option" } ?: "option"
                         val question = if (candidates.size == 2) {
                             "I found two candidates matching '$targetTerm'. Which one do you want?"
                         } else {
@@ -990,6 +1075,7 @@ class ExecutionEngine(
 
                     if (match.status == MatchStatus.MATCHED) {
                         recorder.decision(stepId, ExecutionState.EXECUTING_STEP, DecisionType.EXECUTE, match.reason, match.best!!.confidence)
+                        println("[RUNTIME]\nSTEP ${sIndex + 1} action dispatched")
                         val action = executor.execute(driver, effectiveStep, before, workflow.appContext, workflow.safetyBoundary, runGate)
                         attempted = action.attempted
                         failure = action.reason
@@ -1023,6 +1109,7 @@ class ExecutionEngine(
                                     status = if (stepHadRecovery) StepExecutionStatus.RECOVERED else StepExecutionStatus.COMPLETED,
                                     reason = verification.reason
                                 )
+                                println("[RUNTIME]\nSTEP ${sIndex + 1} transition verified")
                                 break
                             }
                             failure = if (!action.accepted) action.reason else verification.reason
@@ -1130,7 +1217,7 @@ class ExecutionEngine(
                                 )
                             }
                             val candidateDescs = recoveryCandidates.map { it.description }
-                            val targetTerm = effectiveStep.selector.text ?: effectiveStep.selector.role.ifBlank { "option" }
+                            val targetTerm = effectiveStep.selector.text ?: effectiveStep.selector.role?.ifBlank { "option" } ?: "option"
                             val clarReq = ClarificationRequest(
                                 schemaVersion = "1.0",
                                 executionId = request.executionId,
@@ -1250,6 +1337,7 @@ class ExecutionEngine(
         }
 
         blocked()?.let { return it }
+        println("[RUNTIME]\nWORKFLOW_EXECUTION_COMPLETE")
         return finish(ExecutionState.COMPLETED, null)
     }
 

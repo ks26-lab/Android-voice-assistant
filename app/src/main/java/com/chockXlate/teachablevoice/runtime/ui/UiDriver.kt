@@ -7,15 +7,17 @@ import com.chockXlate.teachablevoice.runtime.slots.BoundStep
 import com.chockXlate.teachablevoice.safety.SafetyGate
 
 enum class RuntimeAction {
-    CLICK, INPUT_TEXT, LONG_PRESS, SCROLL, BACK;
+    CLICK, INPUT_TEXT, LONG_PRESS, SCROLL, SWIPE, BACK, HOME;
 
     companion object {
         fun parse(value: String): RuntimeAction? = when (value.trim().uppercase()) {
-            "CLICK", "TAP" -> CLICK
-            "INPUT_TEXT", "SET_TEXT" -> INPUT_TEXT
+            "CLICK", "TAP", "SEARCH", "INCREMENT", "DECREMENT", "OPEN", "SELECT", "CONFIRM_NON_SENSITIVE" -> CLICK
+            "INPUT_TEXT", "SET_TEXT", "TYPE" -> INPUT_TEXT
             "LONG_PRESS" -> LONG_PRESS
             "SCROLL" -> SCROLL
+            "SWIPE" -> SWIPE
             "BACK", "NAVIGATE_BACK" -> BACK
+            "HOME", "NAVIGATE_HOME" -> HOME
             else -> null
         }
     }
@@ -43,6 +45,7 @@ data class ActionOutcome(
 
 interface UiDriver {
     fun isReady(): Boolean
+    fun getActivePackage(): String?
     suspend fun observe(): UiObservation?
 
     /** Must re-observe, re-match, and call gate.dispatch immediately around the side effect. */

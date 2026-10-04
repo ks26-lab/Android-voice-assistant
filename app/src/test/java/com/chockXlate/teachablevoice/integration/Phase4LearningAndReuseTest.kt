@@ -368,7 +368,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e6", "skill_item_chg", boundParameters = mapOf("item" to "Oranges")))
+        val report = engine.execute(ExecutionRequest("e6", "skill_item_chg", boundSlots = mapOf("item" to "Oranges")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("Oranges", driver.lastExecutedAction?.inputText)
@@ -401,7 +401,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e7", "skill_qty_chg", boundParameters = mapOf("quantity" to "5")))
+        val report = engine.execute(ExecutionRequest("e7", "skill_qty_chg", boundSlots = mapOf("quantity" to "5")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("5", driver.lastExecutedAction?.inputText)
@@ -434,7 +434,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e8", "skill_addr_chg", boundParameters = mapOf("address" to "789 Pine Ave")))
+        val report = engine.execute(ExecutionRequest("e8", "skill_addr_chg", boundSlots = mapOf("address" to "789 Pine Ave")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("789 Pine Ave", driver.lastExecutedAction?.inputText)
@@ -467,7 +467,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e9", "skill_search_chg", boundParameters = mapOf("query" to "monitor")))
+        val report = engine.execute(ExecutionRequest("e9", "skill_search_chg", boundSlots = mapOf("query" to "monitor")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("monitor", driver.lastExecutedAction?.inputText)
@@ -514,7 +514,7 @@ class Phase4LearningAndReuseTest {
         }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e10", "skill_multi_param", boundParameters = mapOf("item" to "Salad", "quantity" to "3")))
+        val report = engine.execute(ExecutionRequest("e10", "skill_multi_param", boundSlots = mapOf("item" to "Salad", "quantity" to "3")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals(2, driver.executedActionsCount)
@@ -672,7 +672,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e20", "skill_auto_type", boundParameters = mapOf("text" to "typed value")))
+        val report = engine.execute(ExecutionRequest("e20", "skill_auto_type", boundSlots = mapOf("text" to "typed value")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("typed value", driver.lastExecutedAction?.inputText)
@@ -851,7 +851,7 @@ class Phase4LearningAndReuseTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val initialReport = engine.execute(ExecutionRequest("e27", "skill_midflow_27", boundParameters = mapOf("p1" to "Val1")))
+        val initialReport = engine.execute(ExecutionRequest("e27", "skill_midflow_27", boundSlots = mapOf("p1" to "Val1")))
 
         assertEquals(ExecutionState.ASK, initialReport.state)
         assertTrue(engine.isPaused)

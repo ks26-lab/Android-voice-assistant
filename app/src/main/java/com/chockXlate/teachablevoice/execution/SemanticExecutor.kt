@@ -195,9 +195,10 @@ class SemanticExecutor(private val matcher: SemanticMatcher) {
                     )
                 }
             }
-            RuntimeAction.BACK -> {
-                // Navigation back action permitted
+            RuntimeAction.BACK, RuntimeAction.SWIPE, RuntimeAction.HOME -> {
+                // Navigation back / swipe / home action permitted
             }
+            else -> {}
         }
 
         // 5. Stale target check: verify state identity if present

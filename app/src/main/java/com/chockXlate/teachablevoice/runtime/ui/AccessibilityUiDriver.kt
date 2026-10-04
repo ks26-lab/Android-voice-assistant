@@ -33,6 +33,11 @@ class AccessibilityUiDriver(
         it.isRuntimeReady && !it.isTeachingModeActive && !TeachingSessionManager.isTeachingActive()
     } == true
 
+    override fun getActivePackage(): String? {
+        val service = serviceProvider()?.takeIf { it.isRuntimeReady } ?: return null
+        return service.rootInActiveWindow?.packageName?.toString()
+    }
+
     override suspend fun observe(): UiObservation? = onMain {
         if (!isReady()) return@onMain null
         val service = serviceProvider()?.takeIf { it.isRuntimeReady } ?: return@onMain null
@@ -62,32 +67,115 @@ class AccessibilityUiDriver(
             TransitionVerifier(matcher).startingStateError(step, ui)?.let {
                 return@onMain ActionOutcome(false, reason = it, before = ui)
             }
+            if (step.action == RuntimeAction.BACK) {
+                val dispatched = gate.dispatch(boundary, ui, step) {
+                    if (!isReady() || serviceProvider() !== service) false
+                    else service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                }
+                return@onMain ActionOutcome(dispatched.attempted, dispatched.accepted, dispatched.reason, ui)
+            }
+            if (step.action == RuntimeAction.HOME) {
+                val dispatched = gate.dispatch(boundary, ui, step) {
+                    if (!isReady() || serviceProvider() !== service) false
+                    else service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                }
+                return@onMain ActionOutcome(dispatched.attempted, dispatched.accepted, dispatched.reason, ui)
+            }
+
             val match = matcher.match(step.selector, ui, step.action)
             if (match.status != MatchStatus.MATCHED) return@onMain ActionOutcome(false, reason = match.reason, before = ui)
-            val node = frame.targets[match.best!!.element.elementId]?.get(step.action)
-                ?: return@onMain ActionOutcome(false, reason = "The matched control no longer supports this action.", before = ui)
+            
+            val nodeActions = frame.targets[match.best!!.element.elementId]
+            val node = nodeActions?.get(step.action)
+            val fallbackNode = node ?: nodeActions?.values?.firstOrNull()
+            
             val actionId = when (step.action) {
                 RuntimeAction.CLICK -> AccessibilityNodeInfo.ACTION_CLICK
                 RuntimeAction.INPUT_TEXT -> AccessibilityNodeInfo.ACTION_SET_TEXT
                 RuntimeAction.LONG_PRESS -> AccessibilityNodeInfo.ACTION_LONG_CLICK
-                RuntimeAction.BACK -> AccessibilityNodeInfo.ACTION_CLICK
                 RuntimeAction.SCROLL -> when (step.scrollDirection) {
                     "forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                     "backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
                     else -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                 }
+                else -> -1
             }
-            if (!node.isEnabled || !node.isVisibleToUser || node.actionList.none { it.id == actionId }) {
-                return@onMain ActionOutcome(false, reason = "Live control is disabled, invisible, or does not support the action.", before = ui)
+
+            val canPerformNative = node != null && node.isEnabled && node.isVisibleToUser && node.actionList.any { it.id == actionId }
+            
+            if (canPerformNative) {
+                val arguments = if (step.action == RuntimeAction.INPUT_TEXT) Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, step.inputText)
+                } else null
+                val dispatched = gate.dispatch(boundary, ui, step) {
+                    if (!isReady() || serviceProvider() !== service) false
+                    else node!!.performAction(actionId, arguments)
+                }
+                return@onMain ActionOutcome(dispatched.attempted, dispatched.accepted, dispatched.reason, ui)
             }
-            val arguments = if (step.action == RuntimeAction.INPUT_TEXT) Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, step.inputText)
-            } else null
-            val dispatched = gate.dispatch(boundary, ui, step) {
-                if (!isReady() || serviceProvider() !== service) false
-                else node.performAction(actionId, arguments)
+            
+            // Gesture Fallback
+            if (step.action == RuntimeAction.SWIPE || step.action == RuntimeAction.SCROLL || step.action == RuntimeAction.LONG_PRESS || step.action == RuntimeAction.CLICK) {
+                val bounds = android.graphics.Rect()
+                if (fallbackNode != null) {
+                    fallbackNode.getBoundsInScreen(bounds)
+                } else {
+                    if (step.action == RuntimeAction.SWIPE || step.action == RuntimeAction.SCROLL) {
+                        val displayMetrics = service.resources.displayMetrics
+                        bounds.set(0, 0, displayMetrics.widthPixels, displayMetrics.heightPixels)
+                    } else {
+                        return@onMain ActionOutcome(false, reason = "Action requires a visible target.", before = ui)
+                    }
+                }
+                
+                val path = android.graphics.Path()
+                val centerX = bounds.centerX().toFloat()
+                val centerY = bounds.centerY().toFloat()
+                
+                var duration = 300L
+                if (step.action == RuntimeAction.LONG_PRESS) {
+                    path.moveTo(centerX, centerY)
+                    duration = 600L
+                } else if (step.action == RuntimeAction.CLICK) {
+                    path.moveTo(centerX, centerY)
+                    duration = 100L
+                } else { // SWIPE or SCROLL
+                    val height = bounds.height()
+                    val width = bounds.width()
+                    when (step.scrollDirection ?: "forward") {
+                        "forward", "down" -> { // Swipe up
+                            path.moveTo(centerX, centerY + height * 0.3f)
+                            path.lineTo(centerX, centerY - height * 0.3f)
+                        }
+                        "backward", "up" -> { // Swipe down
+                            path.moveTo(centerX, centerY - height * 0.3f)
+                            path.lineTo(centerX, centerY + height * 0.3f)
+                        }
+                        "left" -> { // Swipe left
+                            path.moveTo(centerX + width * 0.3f, centerY)
+                            path.lineTo(centerX - width * 0.3f, centerY)
+                        }
+                        "right" -> { // Swipe right
+                            path.moveTo(centerX - width * 0.3f, centerY)
+                            path.lineTo(centerX + width * 0.3f, centerY)
+                        }
+                        else -> {
+                            path.moveTo(centerX, centerY + height * 0.3f)
+                            path.lineTo(centerX, centerY - height * 0.3f)
+                        }
+                    }
+                }
+                
+                val gestureBuilder = android.accessibilityservice.GestureDescription.Builder()
+                gestureBuilder.addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, duration))
+                val dispatched = gate.dispatch(boundary, ui, step) {
+                    if (!isReady() || serviceProvider() !== service) false
+                    else service.dispatchGesture(gestureBuilder.build(), null, null)
+                }
+                return@onMain ActionOutcome(dispatched.attempted, dispatched.accepted, dispatched.reason, ui)
             }
-            ActionOutcome(dispatched.attempted, dispatched.accepted, dispatched.reason, ui)
+            
+            ActionOutcome(false, reason = "Live control does not support the action and no fallback applies.", before = ui)
         } finally {
             frame.close()
         }

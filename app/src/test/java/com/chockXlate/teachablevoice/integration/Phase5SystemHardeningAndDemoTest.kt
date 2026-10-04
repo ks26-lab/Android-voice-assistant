@@ -284,7 +284,7 @@ class Phase5SystemHardeningAndDemoTest {
 
         val engine = ExecutionEngine(reloadedRepo, driver)
         val reqResult = ExecutionRequestBuilder().buildRequest(interpretation, matchResult)
-        val request = reqResult.request ?: ExecutionRequest("exec_demo", "skill_demo_search", boundParameters = mapOf("item" to "bluetooth speakers"))
+        val request = reqResult.request ?: ExecutionRequest("exec_demo", "skill_demo_search", boundSlots = mapOf("item" to "bluetooth speakers"))
 
         val report = engine.execute(request)
         assertEquals("Execution must complete successfully", ExecutionState.COMPLETED, report.state)
@@ -560,7 +560,7 @@ class Phase5SystemHardeningAndDemoTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e_type_item", "skill_type_item_hard", boundParameters = mapOf("item" to "Croissant")))
+        val report = engine.execute(ExecutionRequest("e_type_item", "skill_type_item_hard", boundSlots = mapOf("item" to "Croissant")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("Croissant", driver.lastExecutedAction?.inputText)
@@ -593,7 +593,7 @@ class Phase5SystemHardeningAndDemoTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e_type_qty", "skill_type_qty_hard", boundParameters = mapOf("quantity" to "12")))
+        val report = engine.execute(ExecutionRequest("e_type_qty", "skill_type_qty_hard", boundSlots = mapOf("quantity" to "12")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("12", driver.lastExecutedAction?.inputText)
@@ -626,7 +626,7 @@ class Phase5SystemHardeningAndDemoTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e_type_addr", "skill_type_addr_hard", boundParameters = mapOf("address" to "500 5th Ave")))
+        val report = engine.execute(ExecutionRequest("e_type_addr", "skill_type_addr_hard", boundSlots = mapOf("address" to "500 5th Ave")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("500 5th Ave", driver.lastExecutedAction?.inputText)
@@ -659,7 +659,7 @@ class Phase5SystemHardeningAndDemoTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e_type_search", "skill_type_search_hard", boundParameters = mapOf("query" to "quantum computing")))
+        val report = engine.execute(ExecutionRequest("e_type_search", "skill_type_search_hard", boundSlots = mapOf("query" to "quantum computing")))
 
         assertEquals(ExecutionState.COMPLETED, report.state)
         assertEquals("quantum computing", driver.lastExecutedAction?.inputText)
@@ -766,7 +766,7 @@ class Phase5SystemHardeningAndDemoTest {
         driver.onExecuteHook = { driver.currentScreen = s2 }
 
         val engine = ExecutionEngine(repository, driver)
-        val report = engine.execute(ExecutionRequest("e_mid_p5", "skill_midflow_p5", boundParameters = mapOf("p1" to "ValA")))
+        val report = engine.execute(ExecutionRequest("e_mid_p5", "skill_midflow_p5", boundSlots = mapOf("p1" to "ValA")))
 
         assertEquals(ExecutionState.ASK, report.state)
         assertTrue(engine.isPaused)

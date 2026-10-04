@@ -24,6 +24,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.chockXlate.teachablevoice.command.interpretation.CommandInterpreter
 import com.chockXlate.teachablevoice.command.matching.SkillMatcher
 import com.chockXlate.teachablevoice.command.matching.SkillMatchStatus
@@ -32,6 +34,7 @@ import com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus
 import com.chockXlate.teachablevoice.contract.skill.SkillStatus
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.learning.synthesis.WorkflowSynthesizer
+import com.chockXlate.teachablevoice.runtime.trace.RuntimeReport
 import com.chockXlate.teachablevoice.safety.RuntimeSafetyPolicy
 import com.chockXlate.teachablevoice.skill.inspector.WorkflowInspectorImpl
 import com.chockXlate.teachablevoice.skill.repository.SkillRepository
@@ -248,6 +251,7 @@ fun MainDashboardScreen(
     // Dynamic State Titles & Badges
     val (headerStatus, headerVariant) = when {
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.RUNNING -> Pair("RUNNING", StatusVariant.RUNNING)
+        currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.STARTING -> Pair("PREPARING", StatusVariant.LEARNING)
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.PAUSED -> Pair("WAITING", StatusVariant.PAUSED)
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.USER_HANDOFF -> Pair("USER HANDOFF", StatusVariant.HANDOFF)
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.CLARIFICATION_NEEDED -> Pair("WAITING", StatusVariant.WAITING)
@@ -262,6 +266,8 @@ fun MainDashboardScreen(
     val (currentBadge, currentVariant, currentTitle, currentDesc) = when {
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.RUNNING ->
             Quadruple("RUNNING", StatusVariant.RUNNING, "Executing $displaySkillName", "Step $currentRuntimeStep of ${activeWorkflow?.steps?.size ?: 5}")
+        currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.STARTING ->
+            Quadruple("PREPARING", StatusVariant.LEARNING, "Preparing execution...", "Resolving dependencies for $displaySkillName")
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.PAUSED ->
             Quadruple("PAUSED", StatusVariant.PAUSED, "Runtime paused", "Execution suspended at step $currentRuntimeStep.")
         currentState == UiState.SKILL_STORED && runtimeState == RuntimeState.USER_HANDOFF ->
@@ -300,83 +306,20 @@ fun MainDashboardScreen(
                 val normResult = DemonstrationTraceNormalizer.normalize(raw)
                 normalizedTrace = normResult.normalizedTrace
             }
-            delay(300)
             currentState = UiState.NORMALIZED
             activeLogs.addAll(teachingLogNormalizeDone)
         }
     }
 
-    // Runtime Execution Loop
-    LaunchedEffect(runtimeState, currentRuntimeStep) {
-        if (runtimeState == RuntimeState.STARTING) {
-            delay(400)
-            runtimeState = RuntimeState.RUNNING
-        } else if (runtimeState == RuntimeState.RUNNING) {
-            if (selectedScenario == RuntimeScenario.SAFETY_HANDOFF && currentRuntimeStep == 3) {
-                runtimeState = RuntimeState.USER_HANDOFF
-                activeLogs.addAll(handoffScenarioLogs)
-                ActivityEventStream.emit("safety_handoff", "Safety Gate Blocked", ActivityStatus.FAILED, "User control required at Protected Boundary")
-                lastRunState = LastRunData(
-                    hasHistory = true,
-                    outcome = "HANDOFF",
-                    status = "HANDOFF",
-                    skillName = displaySkillName,
-                    completedSteps = 3,
-                    totalSteps = activeWorkflow?.steps?.size ?: 5,
-                    stoppedAt = "Payment",
-                    reason = "User control required"
-                )
-                return@LaunchedEffect
-            }
+    // Real Execution Engine
+    val executionEngine = remember { com.chockXlate.teachablevoice.runtime.ExecutionEngine(repository, com.chockXlate.teachablevoice.runtime.ui.AccessibilityUiDriver()) }
+    var pendingExecutionRequest by remember { mutableStateOf<com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest?>(null) }
+    var pendingClarificationResponse by remember { mutableStateOf<com.chockXlate.teachablevoice.contract.runtime.ClarificationResponse?>(null) }
 
-            if (selectedScenario == RuntimeScenario.CLARIFICATION && currentRuntimeStep == 2) {
-                runtimeState = RuntimeState.CLARIFICATION_NEEDED
-                activeLogs.addAll(clarificationAmbiguousLogs)
-                ActivityEventStream.emit("clarification_needed", "Clarification Needed", ActivityStatus.PENDING, "Target could not be resolved")
-                return@LaunchedEffect
-            }
+    val executionScope = androidx.compose.runtime.rememberCoroutineScope()
 
-            if (selectedScenario == RuntimeScenario.UNRESOLVED_TARGET && currentRuntimeStep == 2) {
-                runtimeState = RuntimeState.TARGET_NOT_RESOLVED
-                activeLogs.addAll(unresolvedScenarioLogs)
-                ActivityEventStream.emit("target_unresolved", "Target Not Resolved", ActivityStatus.FAILED, "Automation paused. User input required.")
-                lastRunState = LastRunData(
-                    hasHistory = true,
-                    outcome = "TARGET_NOT_RESOLVED",
-                    status = "UNRESOLVED",
-                    skillName = displaySkillName,
-                    target = "Element Target"
-                )
-                return@LaunchedEffect
-            }
-
-            delay(700)
-            val totalStepsCount = activeWorkflow?.steps?.size ?: defaultRuntimeSteps.size
-            if (currentRuntimeStep < totalStepsCount) {
-                currentRuntimeStep++
-                val stepLog = runtimeStepLogs.find { it.event == "STEP_${currentRuntimeStep}_${defaultRuntimeSteps.getOrNull(currentRuntimeStep - 1)?.action ?: "ACTION"}" }
-                val verifyLog = runtimeStepLogs.find { it.event == "STEP_${currentRuntimeStep - 1}_COMPLETE" }
-                if (verifyLog != null && activeLogs.none { it.event == verifyLog.event }) activeLogs.add(verifyLog)
-                if (stepLog != null) activeLogs.add(stepLog)
-                ActivityEventStream.emit("runtime_step_$currentRuntimeStep", "Executing Step $currentRuntimeStep of $totalStepsCount", ActivityStatus.IN_PROGRESS, stepLog?.details)
-            } else {
-                runtimeState = RuntimeState.COMPLETED
-                val verifyLast = runtimeStepLogs.find { it.event == "STEP_5_COMPLETE" }
-                val completeLog = runtimeStepLogs.find { it.event == "RUNTIME_COMPLETE" }
-                if (verifyLast != null && activeLogs.none { it.event == verifyLast.event }) activeLogs.add(verifyLast)
-                if (completeLog != null) activeLogs.add(completeLog)
-                ActivityEventStream.emit("runtime_${activeWorkflow?.skillId ?: "run"}", "Runtime Execution", ActivityStatus.COMPLETED, "Completed all $totalStepsCount steps")
-                lastRunState = LastRunData(
-                    hasHistory = true,
-                    outcome = "SUCCESS",
-                    status = "SUCCESS",
-                    skillName = displaySkillName,
-                    stepsCount = totalStepsCount,
-                    failuresCount = 0,
-                    duration = "3.2 s"
-                )
-            }
-        }
+    LaunchedEffect(pendingClarificationResponse) {
+        // Now handled by a detached coroutine scope directly in the action handler
     }
 
     // Action Handler
@@ -532,14 +475,165 @@ fun MainDashboardScreen(
                 }
             }
             "START_RUNTIME" -> {
+                val req = (payload as? com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest)
+                    ?: pendingExecutionRequest 
+                    ?: activeWorkflow?.let { wf ->
+                        com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest(
+                            executionId = "exec_${System.currentTimeMillis()}",
+                            skillId = wf.skillId,
+                            boundSlots = emptyMap()
+                        )
+                    }
+
+                if (req == null) {
+                    runtimeState = RuntimeState.NO_WORKFLOW
+                    return
+                }
+
+                val workflow = repository.getWorkflowById(req.skillId)
+                
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_START", "[RUNTIME]\nRUN requested", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_SKILL", "[RUNTIME]\nSelected skill: ${workflow?.name ?: displaySkillName}", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_SKILL_ID", "[RUNTIME]\nSkill ID: ${req.skillId}", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_WF_ID", "[RUNTIME]\nWorkflow ID: ${workflow?.skillId ?: req.skillId}", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_VERSION", "[RUNTIME]\nWorkflow version: ${req.version}", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_LOADED", "[RUNTIME]\nStored WorkflowIR loaded", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_STEPS", "[RUNTIME]\nStored steps: ${workflow?.steps?.size ?: 0}", "info"))
+                activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_REQUEST", "[RUNTIME]\nExecutionRequest created", "info"))
+
+                pendingExecutionRequest = null // consume it
                 currentRuntimeStep = 1
                 runtimeState = RuntimeState.STARTING
-                ActivityEventStream.emit("runtime_${activeWorkflow?.skillId ?: "run"}", "Runtime Execution", ActivityStatus.IN_PROGRESS, "Executing ${displaySkillName}")
+                ActivityEventStream.emit("runtime_${req.skillId}", "Runtime Execution", ActivityStatus.IN_PROGRESS, "Executing ${displaySkillName}")
                 activeLogs.add(
-                    LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_STARTED", "Executing skill: ${activeWorkflow?.skillId ?: activeSkillId ?: "generic_skill"}", "active")
+                    LogEntry(currentTimeStr, LogCategory.RUNTIME, "RUNTIME_STARTED", "Executing skill: ${req.skillId}", "active")
                 )
                 if (runtimeStepLogs.isNotEmpty()) {
                     activeLogs.add(runtimeStepLogs[0])
+                }
+
+                // Use a lifecycle-independent scope so execution survives Activity going to background (HOME)
+                val runtimeScope = com.chockXlate.teachablevoice.runtime.ExecutionOwner.scope
+                runtimeScope.launch {
+                    val service = com.chockXlate.teachablevoice.app.service.TeachableVoiceAccessibilityService.instance
+                    if (service == null) {
+                        activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "ACCESSIBILITY_UNAVAILABLE", "Accessibility service is unavailable. Please enable it in Settings.", "error"))
+                        ActivityEventStream.emit("execution_failed", "Accessibility Unavailable", ActivityStatus.FAILED, "Service not enabled")
+                        runtimeState = RuntimeState.COMPLETED
+                        lastRunState = LastRunData(hasHistory = true, outcome = "FAILED", status = "ACCESSIBILITY_UNAVAILABLE", skillName = "Execution", reason = "Service not active")
+                        return@launch
+                    }
+                    
+                    android.util.Log.i("RUNTIME", "[RUNTIME][LIFECYCLE] EXECUTION_JOB_ACTIVE=true (BEFORE_HOME)")
+                    android.util.Log.i("RUNTIME", "[RUNTIME][SERVICE] BEFORE_HOME=${service != null}")
+
+                    // Move automation app out of foreground
+                    activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "NAVIGATE_HOME", "Moving to background", "info"))
+                    android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] HOME_DISPATCH_START")
+                    val homeResult = service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME)
+                    android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] HOME_DISPATCH_RESULT=$homeResult")
+
+                    android.util.Log.i("RUNTIME", "[RUNTIME][LIFECYCLE] EXECUTION_JOB_ACTIVE=true (AFTER_HOME)")
+                    android.util.Log.i("RUNTIME", "[RUNTIME][SERVICE] AFTER_HOME=${com.chockXlate.teachablevoice.app.service.TeachableVoiceAccessibilityService.instance != null}")
+                    
+                    // Launch target application
+                    val workflow = repository.getWorkflowById(req.skillId)
+                    val expectedPackage = workflow?.appContext
+                    android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] STORED_APP_CONTEXT=$expectedPackage")
+                    
+                    if (expectedPackage != null && expectedPackage != "unknown") {
+                        android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] RESOLVED_PACKAGE=$expectedPackage")
+                        android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] GET_LAUNCH_INTENT_START")
+                        val launchIntent = service.packageManager.getLaunchIntentForPackage(expectedPackage)
+                        android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] LAUNCH_INTENT_NULL=${launchIntent == null}")
+                        
+                        if (launchIntent != null) {
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] PACKAGE_EXISTS=true")
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] INTENT_COMPONENT=${launchIntent.component}")
+                            activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "LAUNCH_TARGET", "Launching $expectedPackage", "info"))
+                            launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LIFECYCLE] EXECUTION_JOB_ACTIVE=true (BEFORE_TARGET_LAUNCH)")
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] START_ACTIVITY_START")
+                            try {
+                                service.startActivity(launchIntent)
+                                android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] START_ACTIVITY_SUCCESS")
+                            } catch (e: Exception) {
+                                if (e is kotlinx.coroutines.CancellationException) throw e
+                                android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] START_ACTIVITY_EXCEPTION=${e.javaClass.name}: ${e.message}")
+                            }
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LIFECYCLE] EXECUTION_JOB_ACTIVE=true (AFTER_TARGET_LAUNCH)")
+                        } else {
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] PACKAGE_EXISTS=false")
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] ERROR=NO_LAUNCH_INTENT")
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] PACKAGE=$expectedPackage")
+                            android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] TARGET_LAUNCH_FAILED")
+                            android.util.Log.i("RUNTIME", "REASON=NO_LAUNCH_INTENT")
+                            // Stop safely if target launch failed
+                            runtimeState = RuntimeState.COMPLETED
+                            lastRunState = LastRunData(hasHistory = true, outcome = "FAILED", status = "TARGET_LAUNCH_FAILED", skillName = workflow?.name ?: "Skill", reason = "Cannot find launch intent for package: $expectedPackage")
+                            return@launch
+                        }
+                    } else {
+                        android.util.Log.i("RUNTIME", "[RUNTIME][LAUNCH] TARGET_LAUNCH_FAILED")
+                        android.util.Log.i("RUNTIME", "REASON=INVALID_PACKAGE_NAME")
+                        // Stop safely
+                        runtimeState = RuntimeState.COMPLETED
+                        lastRunState = LastRunData(hasHistory = true, outcome = "FAILED", status = "TARGET_LAUNCH_FAILED", skillName = workflow?.name ?: "Skill", reason = "Missing or invalid target package: $expectedPackage")
+                        return@launch
+                    }
+
+                    // Update UI state to RUNNING right before executing!
+                    runtimeState = RuntimeState.RUNNING
+
+                    activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "EXECUTION_START", "Handing off to ExecutionEngine", "info"))
+                    val report = try {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            executionEngine.execute(req)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        android.util.Log.e("RUNTIME", "Exception during executionEngine.execute: ${e.message}", e)
+                        // Create a failed report since ExecutionEngine couldn't handle it
+                        RuntimeReport(
+                            result = com.chockXlate.teachablevoice.contract.runtime.ExecutionResult(
+                                executionId = req.executionId,
+                                success = false,
+                                finalState = com.chockXlate.teachablevoice.contract.runtime.ExecutionState.FAILED,
+                                stepsCompleted = 0,
+                                totalSteps = 0,
+                                errorMessage = "Execution threw an unexpected error: ${e.message}"
+                            ),
+                            trace = com.chockXlate.teachablevoice.contract.runtime.ExecutionTrace(
+                                executionId = req.executionId,
+                                skillId = req.skillId,
+                                startTime = System.currentTimeMillis()
+                            ),
+                            diagnostics = emptyList(),
+                            stoppedStepId = null
+                        )
+                    }
+                    
+                    if (report.result.finalState == com.chockXlate.teachablevoice.contract.runtime.ExecutionState.WAITING_FOR_USER) {
+                        runtimeState = RuntimeState.CLARIFICATION_NEEDED
+                        val reqClar = report.result.clarificationRequest
+                        if (reqClar != null && reqClar.candidateDescriptions.isNotEmpty()) {
+                            dynamicClarificationOptions = reqClar.candidateDescriptions
+                        } else {
+                            dynamicClarificationOptions = listOf("Option A", "Option B")
+                        }
+                        ActivityEventStream.emit("execution_paused", "Clarification Needed", ActivityStatus.PENDING, report.result.errorMessage ?: "Ambiguous target")
+                        activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "CLARIFICATION_NEEDED", report.result.errorMessage ?: "Ambiguous target", "warning"))
+                    } else {
+                        runtimeState = RuntimeState.COMPLETED
+                        if (report.result.success) {
+                            ActivityEventStream.emit("execution_success", "Execution Completed", ActivityStatus.COMPLETED, "Successfully executed workflow")
+                            lastRunState = LastRunData(hasHistory = true, outcome = "SUCCESS", status = "SUCCESS", skillName = workflow?.name ?: "Skill", stepsCount = report.result.totalSteps, duration = "Done")
+                        } else {
+                            ActivityEventStream.emit("execution_failed", "Execution Failed", ActivityStatus.FAILED, report.result.errorMessage ?: "Unknown error")
+                            lastRunState = LastRunData(hasHistory = true, outcome = "FAILED", status = "FAILED", skillName = workflow?.name ?: "Skill", reason = report.result.errorMessage ?: "Unknown error")
+                        }
+                    }
                 }
             }
             "PAUSE_RUNTIME" -> {
@@ -564,9 +658,73 @@ fun MainDashboardScreen(
                     LogEntry(currentTimeStr, LogCategory.RECOVERY, "CLARIFICATION_RECEIVED", "User selected: '$choice'", "success")
                 )
                 activeLogs.addAll(clarificationRecoveryLogs)
-                val matched = repository.getAllWorkflows().firstOrNull { it.name.equals(choice, ignoreCase = true) || it.intent.equals(choice, ignoreCase = true) }
-                if (matched != null) {
-                    selectedWorkflowId = matched.skillId
+                
+                val pausedId = executionEngine.pausedExecutionId
+                if (pausedId != null) {
+                    val choiceIndex = dynamicClarificationOptions.indexOf(choice)
+                    val idx = if (choiceIndex >= 0) choiceIndex else 0
+                    val resp = com.chockXlate.teachablevoice.contract.runtime.ClarificationResponse(
+                        executionId = pausedId,
+                        userResponseText = choice,
+                        selectedCandidateIndex = idx
+                    )
+                    pendingClarificationResponse = resp
+                    val runtimeScope = com.chockXlate.teachablevoice.runtime.ExecutionOwner.scope
+                    runtimeScope.launch {
+                        val currentTimeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+                        val report = try {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                executionEngine.resume(resp)
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            android.util.Log.e("RUNTIME", "Exception during executionEngine.resume: ${e.message}", e)
+                            RuntimeReport(
+                                result = com.chockXlate.teachablevoice.contract.runtime.ExecutionResult(
+                                    executionId = resp.executionId,
+                                    success = false,
+                                    finalState = com.chockXlate.teachablevoice.contract.runtime.ExecutionState.FAILED,
+                                    stepsCompleted = 0,
+                                    totalSteps = 0,
+                                    errorMessage = "Execution threw an unexpected error: ${e.message}"
+                                ),
+                                trace = com.chockXlate.teachablevoice.contract.runtime.ExecutionTrace(
+                                    executionId = resp.executionId,
+                                    skillId = "unknown",
+                                    startTime = System.currentTimeMillis()
+                                ),
+                                diagnostics = emptyList(),
+                                stoppedStepId = null
+                            )
+                        }
+
+                        if (report.result.finalState == com.chockXlate.teachablevoice.contract.runtime.ExecutionState.WAITING_FOR_USER) {
+                            runtimeState = RuntimeState.CLARIFICATION_NEEDED
+                            val reqClar = report.result.clarificationRequest
+                            if (reqClar != null && reqClar.candidateDescriptions.isNotEmpty()) {
+                                dynamicClarificationOptions = reqClar.candidateDescriptions
+                            } else {
+                                dynamicClarificationOptions = listOf("Option A", "Option B")
+                            }
+                            ActivityEventStream.emit("execution_paused", "Clarification Needed", ActivityStatus.PENDING, report.result.errorMessage ?: "Ambiguous target")
+                            activeLogs.add(LogEntry(currentTimeStr, LogCategory.RUNTIME, "CLARIFICATION_NEEDED", report.result.errorMessage ?: "Ambiguous target", "warning"))
+                        } else {
+                            runtimeState = RuntimeState.COMPLETED
+                            val workflow = repository.getWorkflowById(report.workflowId ?: "")
+                            if (report.result.success) {
+                                ActivityEventStream.emit("execution_success", "Execution Completed", ActivityStatus.COMPLETED, "Successfully executed workflow")
+                                lastRunState = LastRunData(hasHistory = true, outcome = "SUCCESS", status = "SUCCESS", skillName = workflow?.name ?: "Skill", stepsCount = report.result.totalSteps, duration = "Done")
+                            } else {
+                                ActivityEventStream.emit("execution_failed", "Execution Failed", ActivityStatus.FAILED, report.result.errorMessage ?: "Unknown error")
+                                lastRunState = LastRunData(hasHistory = true, outcome = "FAILED", status = "FAILED", skillName = workflow?.name ?: "Skill", reason = report.result.errorMessage ?: "Unknown error")
+                            }
+                        }
+                    }
+                } else {
+                    val matched = repository.getAllWorkflows().firstOrNull { it.name.equals(choice, ignoreCase = true) || it.intent.equals(choice, ignoreCase = true) }
+                    if (matched != null) {
+                        selectedWorkflowId = matched.skillId
+                    }
                 }
             }
             "RETURN_TO_USER" -> {
@@ -626,6 +784,13 @@ fun MainDashboardScreen(
             return
         }
 
+        println("[COMMAND][INPUT]")
+        println("TEXT=$trimmed")
+
+        println("[REPLAY][START]")
+        println("SOURCE=DASHBOARD_COMMAND")
+        println("COMMAND=$trimmed")
+
         activeLogs.add(
             LogEntry(currentTimeStr, LogCategory.ACTION, "COMMAND_RECEIVED", "Received command: \"$trimmed\"", "normal")
         )
@@ -652,39 +817,46 @@ fun MainDashboardScreen(
         // 2. Semantic Understanding
         val understanding = CommandInterpreter.understandCommand(trimmed)
 
+        println("[COMMAND][INTERPRETATION]")
+        println("INTENT=${understanding.intent.canonicalName}")
+        println("EXTRACTED_SLOTS=${understanding.slots.joinToString { "${it.name}=${it.rawValue}" }}")
+
         // 3. Skill Matching against authoritative Repository
         val matcher = SkillMatcher(repository)
         val matchResult = matcher.match(understanding)
 
         when (matchResult.status) {
             SkillMatchStatus.MATCHED -> {
-                val matchedWf = repository.getWorkflowById(matchResult.selectedSkillId)
+                val matchedWf = if (matchResult.selectedSkillId != null) repository.getWorkflowById(matchResult.selectedSkillId) else null
                 if (matchedWf != null) {
                     selectedWorkflowId = matchedWf.skillId
-                    val buildResult = ExecutionRequestBuilder.build(understanding, matchResult, repository)
-                    if (buildResult.status == ExecutionRequestStatus.READY_FOR_PERSON_2) {
+                    val buildResult = com.chockXlate.teachablevoice.command.request.ExecutionRequestBuilder.build(understanding, matchResult, repository)
+                    if (buildResult.status == com.chockXlate.teachablevoice.command.request.ExecutionRequestStatus.READY_FOR_PERSON_2) {
                         currentState = UiState.SKILL_STORED
+                        pendingExecutionRequest = buildResult.executionRequest
+                        println("REQUEST_CREATED=true")
                         runtimeState = RuntimeState.READY
                         currentRuntimeStep = 1
                         ActivityEventStream.emit("matched_${matchedWf.skillId}", "Matched: ${matchedWf.name}", ActivityStatus.COMPLETED, "Prepared for execution")
                         activeLogs.add(
-                            LogEntry(currentTimeStr, LogCategory.MATCH, "SKILL_MATCHED", "Matched skill '${matchedWf.name}' [ID: ${matchedWf.skillId}]", "success")
+                            LogEntry(currentTimeStr, LogCategory.RUNTIME, "SKILL_MATCHED", "Matched skill '${matchedWf.name}' [ID: ${matchedWf.skillId}]", "success")
                         )
-                        handleAction("START_RUNTIME")
+                        handleAction("START_RUNTIME", buildResult.executionRequest)
                     } else {
+                        println("REQUEST_CREATED=false")
                         activeLogs.add(
-                            LogEntry(currentTimeStr, LogCategory.MATCH, "REQUEST_REJECTED", buildResult.rejectionReason ?: "Missing slots", "warning")
+                            LogEntry(currentTimeStr, LogCategory.RUNTIME, "REQUEST_REJECTED", buildResult.rejectionReason ?: "Missing slots", "warning")
                         )
                     }
                 }
             }
             SkillMatchStatus.AMBIGUOUS -> {
                 runtimeState = RuntimeState.CLARIFICATION_NEEDED
-                val candidates = matchResult.candidates.map { it.workflow.name.ifBlank { it.workflow.intent } }
+                val candidates = matchResult.candidates.map { repository.getWorkflowById(it.skillId)?.name?.ifBlank { it.intent } ?: it.intent }
                 dynamicClarificationOptions = if (candidates.isNotEmpty()) candidates else listOf("Option A", "Option B")
                 ActivityEventStream.emit("clarify_match", "Ambiguous Command", ActivityStatus.PENDING, "Multiple skills match: ${candidates.joinToString()}")
                 activeLogs.add(
-                    LogEntry(currentTimeStr, LogCategory.MATCH, "MATCH_AMBIGUOUS", "Command is ambiguous between: ${candidates.joinToString(", ")}", "warning")
+                    LogEntry(currentTimeStr, LogCategory.RUNTIME, "MATCH_AMBIGUOUS", "Command is ambiguous between: ${candidates.joinToString(", ")}", "warning")
                 )
             }
             SkillMatchStatus.UNKNOWN -> {
@@ -692,7 +864,14 @@ fun MainDashboardScreen(
                 runtimeState = RuntimeState.NO_WORKFLOW
                 ActivityEventStream.emit("unknown_cmd", "Unknown Skill", ActivityStatus.FAILED, "No matching workflow in repository")
                 activeLogs.add(
-                    LogEntry(currentTimeStr, LogCategory.MATCH, "UNKNOWN_WORKFLOW", "No matching workflow found for \"$trimmed\". Teach this skill to enable execution.", "error")
+                    LogEntry(currentTimeStr, LogCategory.RUNTIME, "UNKNOWN_WORKFLOW", "No matching workflow found for \"$trimmed\". Teach this skill to enable execution.", "error")
+                )
+            }
+            SkillMatchStatus.NEEDS_CLARIFICATION -> {
+                runtimeState = RuntimeState.CLARIFICATION_NEEDED
+                ActivityEventStream.emit("clarify_cmd", "Clarification Needed", ActivityStatus.PENDING, "Please clarify command")
+                activeLogs.add(
+                    LogEntry(currentTimeStr, LogCategory.RUNTIME, "NEEDS_CLARIFICATION", "Command needs clarification: \"$trimmed\"", "warning")
                 )
             }
         }

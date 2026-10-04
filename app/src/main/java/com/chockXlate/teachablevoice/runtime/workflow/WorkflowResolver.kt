@@ -3,13 +3,14 @@ package com.chockXlate.teachablevoice.runtime.workflow
 import com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.repository.SkillRepository
+import com.chockXlate.teachablevoice.runtime.cache.WorkflowRuntimeCache
 
 data class WorkflowResolution(val workflow: Workflow? = null, val error: String? = null)
 
 /** Uses the caller's learned-skill store. The frozen API provides current content only. */
 class WorkflowResolver(private val repository: SkillRepository) {
     fun resolve(request: ExecutionRequest): WorkflowResolution {
-        val workflow = repository.getWorkflowById(request.skillId)
+        val workflow = WorkflowRuntimeCache.get(request.skillId)
             ?: return WorkflowResolution(error = "No learned workflow exists for the requested skill.")
         val error = when {
             workflow.skillId != request.skillId -> "Repository returned a different skill."

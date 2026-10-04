@@ -252,7 +252,7 @@ class Phase2ClosedLoopExecutionTest {
         val request = ExecutionRequest(
             executionId = "exec_t2",
             skillId = "skill_exact_01",
-            boundParameters = mapOf("song" to "Bohemian Rhapsody")
+            boundSlots = mapOf("song" to "Bohemian Rhapsody")
         )
 
         val report = engine.execute(request)
@@ -312,7 +312,7 @@ class Phase2ClosedLoopExecutionTest {
         val request = ExecutionRequest(
             executionId = "exec_t4",
             skillId = "skill_order_item",
-            boundParameters = mapOf("item" to "Oranges")
+            boundSlots = mapOf("item" to "Oranges")
         )
 
         val report = engine.execute(request)
@@ -368,7 +368,7 @@ class Phase2ClosedLoopExecutionTest {
         val request = ExecutionRequest(
             executionId = "exec_t5",
             skillId = "skill_qty_test",
-            boundParameters = mapOf("quantity" to "5")
+            boundSlots = mapOf("quantity" to "5")
         )
 
         val report = engine.execute(request)
@@ -424,7 +424,7 @@ class Phase2ClosedLoopExecutionTest {
         val request = ExecutionRequest(
             executionId = "exec_t6",
             skillId = "skill_addr_test",
-            boundParameters = mapOf("address" to "789 Pine Ave")
+            boundSlots = mapOf("address" to "789 Pine Ave")
         )
 
         val report = engine.execute(request)
@@ -1008,7 +1008,7 @@ class Phase2ClosedLoopExecutionTest {
         val request = ExecutionRequest(
             executionId = "exec_midflow",
             skillId = "skill_midflow_test",
-            boundParameters = mapOf("item" to "Margherita")
+            boundSlots = mapOf("item" to "Margherita")
         )
 
         val initialReport = engine.execute(request)

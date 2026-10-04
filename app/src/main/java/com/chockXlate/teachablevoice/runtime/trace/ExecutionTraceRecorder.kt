@@ -110,7 +110,7 @@ data class RuntimeReport(
     val originalCommand: String? = null,
     val finalStatus: FinalExecutionStatus = determineFinalStatus(result, recoveryRecords, uncertaintyRecords),
     val startedAt: Long = trace.startTime,
-    val completedAt: Long = trace.endTime,
+    val completedAt: Long = trace.endTime ?: 0L,
     val durationMs: Long = result.durationMs,
     val stepsTotal: Int = result.totalSteps,
     val stepsCompleted: Int = result.stepsCompleted,
@@ -319,7 +319,7 @@ data class RuntimeReport(
             )
         }
     }
-)
+}
 
 class StepTraceTracker(
     val stepId: String,
@@ -548,7 +548,7 @@ class ExecutionTraceRecorder(private val request: ExecutionRequest) {
         verification: com.chockXlate.teachablevoice.runtime.verification.VerificationResult
     ) {
         val decisionType = if (verification.verified) DecisionType.PROCEED else DecisionType.ABORT
-        val execState = if (verification.verified) ExecutionState.VERIFYING else ExecutionState.FAILED
+        val execState = if (verification.verified) ExecutionState.WAITING_TRANSITION else ExecutionState.FAILED
         diagnostics.add(RuntimeDiagnostic(
             stepId = stepId,
             state = execState,

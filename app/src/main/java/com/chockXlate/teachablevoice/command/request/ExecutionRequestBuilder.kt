@@ -7,6 +7,7 @@ import com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository
 import com.chockXlate.teachablevoice.skill.repository.SkillRepository
+import com.chockXlate.teachablevoice.runtime.cache.WorkflowRuntimeCache
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 
@@ -35,7 +36,7 @@ object ExecutionRequestBuilder {
         overrideExecutionId: String? = null
     ): ExecutionRequestBuildResult {
         val skillId = matchResult.selectedSkillId
-        val workflow = matchResult.selectedWorkflow ?: if (skillId != null) repository.getWorkflowById(skillId) else null
+        val workflow = matchResult.selectedWorkflow ?: if (skillId != null) WorkflowRuntimeCache.get(skillId) else null
         return buildInternal(understandingResult, matchResult, workflow, repository, overrideExecutionId)
     }
 
@@ -344,6 +345,12 @@ object ExecutionRequestBuilder {
         )
 
         diagnostics.add("Successfully built ExecutionRequest '${request.executionId}' for skill '${request.skillId}' (v${request.version})")
+
+        println("[EXECUTION_REQUEST][CREATED]")
+        println("EXECUTION_ID=${request.executionId}")
+        println("WORKFLOW_ID=${workflow.skillId}")
+        println("SKILL_ID=${request.skillId}")
+        println("BOUND_SLOTS=${boundSlots.entries.joinToString { "${it.key}=${it.value}" }}")
 
         return ExecutionRequestBuildResult(
             schemaVersion = "1.0",
