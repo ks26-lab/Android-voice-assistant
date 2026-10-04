@@ -3,13 +3,14 @@ package com.chockXlate.teachablevoice.command.matching
 import com.chockXlate.teachablevoice.command.interpretation.CommandUnderstandingResult
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository
+import com.chockXlate.teachablevoice.skill.repository.SkillRepository
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
 import com.chockXlate.teachablevoice.skill.validation.ValidationSeverity
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 
 /**
  * Generic deterministic Skill Matcher for Phase 11.
- * Matches a [CommandUnderstandingResult] against learned workflows in [LocalSkillRepository].
+ * Matches a [CommandUnderstandingResult] against learned workflows in [SkillRepository].
  *
  * Produces [SkillMatchResult] with status:
  * - MATCHED: Exactly one compatible learned workflow found.
@@ -19,7 +20,7 @@ import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
  * Does NOT construct ExecutionRequest or perform runtime execution (Phase 12).
  */
 class SkillMatcher(
-    private val repository: LocalSkillRepository
+    private val repository: SkillRepository
 ) {
 
     fun match(understandingResult: CommandUnderstandingResult): SkillMatchResult {

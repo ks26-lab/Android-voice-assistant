@@ -181,15 +181,27 @@ The runtime is designed to:
 ## Requirements
 
 Recommended environment:
-- Android Studio
+- Android Studio (or JDK 17 + Android Command Line Tools)
 - Android SDK / Platform Tools (`adb`)
-- Compatible JDK
-- Android physical device or emulator
-- Accessibility Service support
-- USB debugging for physical-device development
+- JDK 17
+- Android physical device (connected via USB Debugging or Wi-Fi Debugging) — **no emulator required**
+- Accessibility Service support on target physical device
 - Python 3 for the Person-2 test harness
 
 The included Gradle wrapper is used, so a separate Gradle installation is not required.
+
+### Low-Resource & No-Emulator Setup Guide
+For laptops with limited RAM/CPU resources where running an Android Emulator is not feasible:
+1. **Physical Device Debugging**: Enable **Developer Options** and **USB Debugging** on your Android smartphone. Connect via USB cable.
+2. **Verify ADB connection**:
+   ```bash
+   adb devices
+   ```
+3. **Build & Direct Physical Install**:
+   ```bash
+   ./gradlew installDebug
+   ```
+4. **Optimized Gradle Heap**: Gradle JVM heap is optimized to `-Xmx1536m` in `gradle.properties` with build caching enabled so lower-end machines build fast without memory errors.
 
 ## Clone and Build
 
@@ -216,6 +228,7 @@ or:
 ```bash
 ./gradlew installDebug
 ```
+
 
 ## Accessibility Setup
 

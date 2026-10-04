@@ -36,9 +36,35 @@ def main():
     if not sdk:
         props = ROOT / "local.properties"
         if props.exists():
-            sdk = next((line.split("=", 1)[1] for line in props.read_text().splitlines() if line.startswith("sdk.dir=")), None)
+            raw_sdk = next((line.split("=", 1)[1].strip() for line in props.read_text().splitlines() if line.startswith("sdk.dir=")), None)
+            if raw_sdk:
+                clean_sdk = raw_sdk.replace("\\:", ":").replace("\\\\", "/").replace("\\", "/")
+                while "//" in clean_sdk:
+                    clean_sdk = clean_sdk.replace("//", "/")
+                if (Path(clean_sdk) / "platforms/android-34/android.jar").exists():
+                    sdk = clean_sdk
+                elif Path(clean_sdk).exists():
+                    sdk = clean_sdk
+
+    if not sdk:
+        # Fallback candidate locations for Windows / macOS / Linux
+        candidates = [
+            Path("D:/Softwares/Android/SDK"),
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Android" / "Sdk",
+            Path.home() / "AppData" / "Local" / "Android" / "Sdk",
+            Path.home() / "Library" / "Android" / "sdk",
+            Path.home() / "Android" / "Sdk",
+            Path("C:/Android/Sdk"),
+        ]
+        for candidate in candidates:
+            if (candidate / "platforms/android-34/android.jar").exists():
+                sdk = str(candidate)
+                break
+
     if not sdk or not (Path(sdk) / "platforms/android-34/android.jar").exists():
-        raise SystemExit("Android SDK 34 is required (ANDROID_HOME or local.properties).")
+        raise SystemExit(f"Android SDK 34 is required in '{sdk or 'unknown'}'. Please ensure API 34 platform (platforms/android-34/android.jar) is installed via Android SDK Manager.")
+
+
     android_jar = str(Path(sdk) / "platforms/android-34/android.jar")
     base = ROOT / "app/src/main/java/com/chockXlate/teachablevoice"
     folders = ["contract", "runtime", "safety", "execution", "app/service", "teach/capture"]

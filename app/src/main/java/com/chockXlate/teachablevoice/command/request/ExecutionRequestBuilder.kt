@@ -6,6 +6,7 @@ import com.chockXlate.teachablevoice.command.matching.SkillMatchStatus
 import com.chockXlate.teachablevoice.contract.runtime.ExecutionRequest
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.repository.LocalSkillRepository
+import com.chockXlate.teachablevoice.skill.repository.SkillRepository
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 
@@ -30,7 +31,7 @@ object ExecutionRequestBuilder {
     fun build(
         understandingResult: CommandUnderstandingResult,
         matchResult: SkillMatchResult,
-        repository: LocalSkillRepository,
+        repository: SkillRepository,
         overrideExecutionId: String? = null
     ): ExecutionRequestBuildResult {
 
@@ -54,7 +55,7 @@ object ExecutionRequestBuilder {
         understandingResult: CommandUnderstandingResult,
         matchResult: SkillMatchResult,
         workflow: Workflow?,
-        repository: LocalSkillRepository?,
+        repository: SkillRepository?,
         overrideExecutionId: String?,
         versionOverride: Int? = null
     ): ExecutionRequestBuildResult {

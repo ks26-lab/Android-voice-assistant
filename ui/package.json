@@ -1,0 +1,15 @@
+{
+  "name": "teachable-voice-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Standalone UI for Teachable Voice Automation and One-Shot Semantic Workflow Learning",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.1.0"
+  }
+}

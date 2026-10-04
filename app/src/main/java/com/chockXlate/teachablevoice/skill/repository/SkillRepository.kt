@@ -10,4 +10,6 @@ interface SkillRepository {
     fun getWorkflowById(skillId: String): Workflow?
     fun getAllWorkflows(): List<Workflow>
     fun deleteWorkflow(skillId: String): Boolean
+    fun getSkillVersion(skillId: String): Int = 1
+    fun contains(skillId: String): Boolean = getWorkflowById(skillId) != null
 }

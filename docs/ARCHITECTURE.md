@@ -42,7 +42,7 @@ Verification polls boundedly, ignores UUID/time/bounds and checks semantic chang
 
 ## Gap map
 
-- IMPLEMENTED / CONNECTED: capture, synthesis, shared repository, request builder, engine, fresh nodes, safety, verification, reporting, push-to-talk.
-- TESTED: JVM tests cover matching, binding, state labels, multi-step execution, lock persistence, unknown/missing/ambiguous cases and redaction; see EVALUATION for device evidence.
+- IMPLEMENTED / CONNECTED: capture, synthesis, persistent disk-backed repository, request builder, engine, fresh nodes, safety, verification, reporting, push-to-talk, automatic runtime discovery.
+- TESTED: JVM tests cover persistence across restarts, matching, binding, state labels, multi-step execution, lock persistence, unknown/missing/ambiguous cases, and redaction; see EVALUATION for device evidence.
 - LIVE-DEPENDENT: recognizer/provider, third-party app accessibility quality, keyboard/window behavior, target screen setup.
-- LIMITED: finite command grammar, single-app capture, in-memory store, manual variable confirmation, no historical-version resolution or autonomous popup/back recovery.
+- LIMITED: finite command grammar, single-app capture, manual variable confirmation, no historical-version resolution or autonomous popup/back recovery.

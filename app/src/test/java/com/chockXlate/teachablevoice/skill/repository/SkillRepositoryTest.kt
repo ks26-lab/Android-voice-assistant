@@ -205,6 +205,25 @@ class SkillRepositoryTest {
     }
 
     @Test
+    fun test35b_persistenceSurvivesDirectFileDirectoryRestart() {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "test_repo_${System.currentTimeMillis()}")
+        dir.mkdirs()
+        try {
+            val repo1 = LocalSkillRepository(dir)
+            val wf = createValidWorkflow("skill_disk_persist")
+            repo1.saveWorkflow(wf)
+
+            val repo2 = LocalSkillRepository(dir)
+            val loaded = repo2.getWorkflowById("skill_disk_persist")
+            assertNotNull(loaded)
+            assertEquals("skill_disk_persist", loaded?.skillId)
+            assertEquals("order_food", loaded?.intent)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun test36_schemaVersionPreserved() {
         val wf = createValidWorkflow("skill_schema")
         repo.saveWorkflow(wf)
