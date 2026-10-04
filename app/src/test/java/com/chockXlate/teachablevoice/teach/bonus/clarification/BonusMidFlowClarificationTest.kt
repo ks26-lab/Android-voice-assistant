@@ -30,13 +30,13 @@ class BonusMidFlowClarificationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_0_open_search",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(role = "android.widget.Button", text = "Search Icon")
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(role = "android.widget.Button", text = "Search Icon")
                 ),
                 WorkflowStep(
                     stepId = "step_1_input_query",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_query")
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_query")
                 )
             )
         )

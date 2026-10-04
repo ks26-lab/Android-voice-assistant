@@ -49,6 +49,12 @@ class TargetAppHandoffAndResumeTest {
         override fun getAllWorkflows() = listOfNotNull(workflow)
         override fun saveWorkflow(workflow: Workflow): Boolean { this.workflow = workflow; return true }
         override fun deleteWorkflow(skillId: String): Boolean { workflow = null; return true }
+        override fun createSkill(name: String, description: String, id: String): com.chockXlate.teachablevoice.contract.skill.SkillRecord {
+            return com.chockXlate.teachablevoice.contract.skill.SkillRecord(id = id.ifBlank { "test_id" }, name = name, description = description)
+        }
+        override fun getSkill(id: String): com.chockXlate.teachablevoice.contract.skill.SkillRecord? = null
+        override fun listSkills(): List<com.chockXlate.teachablevoice.contract.skill.SkillRecord> = emptyList()
+        override fun updateSkill(skill: com.chockXlate.teachablevoice.contract.skill.SkillRecord): Boolean = true
     }
 
     private class TestDriver(var screen: UiObservation) : UiDriver {

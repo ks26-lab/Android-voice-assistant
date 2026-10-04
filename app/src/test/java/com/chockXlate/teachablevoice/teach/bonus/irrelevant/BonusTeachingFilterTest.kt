@@ -58,15 +58,13 @@ class BonusTeachingFilterTest {
     fun test1_requiredTapFollowedByMeaningfulStateChange_retained() {
         val t0 = 1000L
         val action = createActionEvent("a1", t0, "CLICK", "Button", "Search", "com.example.targetapp:id/search_btn")
-        val stateEv = StateEvent("s1", t0 + 10L, createDummyState("state_home"), createDummyState("state_results"), "a1")
+        val stateEv = StateEvent(stateEventId = "s1", timestamp = t0 + 10L, beforeState = createDummyState("state_home"), afterState = createDummyState("state_results"), causeActionId = "a1")
 
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_1",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action), TraceEvent.State("s1", t0 + 10L, stateEv)),
             userActions = listOf(action),
             stateEvents = listOf(stateEv)
@@ -86,10 +84,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_2",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action)),
             userActions = listOf(action)
         )
@@ -102,18 +98,16 @@ class BonusTeachingFilterTest {
     @Test
     fun test3_requiredSearchInteraction_retained() {
         val t0 = 1000L
-        val voice = VoiceEvent("v1", t0, "search for pizza")
+        val voice = VoiceEvent(eventId = "v1", timestamp = t0, transcript = "search for pizza")
         val action1 = createActionEvent("a1", t0 + 100L, "INPUT_TEXT", "EditText", "Pizza", "com.example.targetapp:id/search_box", inputData = "Pizza")
         val action2 = createActionEvent("a2", t0 + 200L, "CLICK", "Button", "Submit", "com.example.targetapp:id/btn_submit")
-        val stateEv = StateEvent("s1", t0 + 210L, createDummyState("state_input"), createDummyState("state_results"), "a2")
+        val stateEv = StateEvent(stateEventId = "s1", timestamp = t0 + 210L, beforeState = createDummyState("state_input"), afterState = createDummyState("state_results"), causeActionId = "a2")
 
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_3",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 300L,
             traceEvents = listOf(
                 TraceEvent.Voice("v1", t0, voice),
                 TraceEvent.Action("a1", t0 + 100L, action1),
@@ -134,17 +128,15 @@ class BonusTeachingFilterTest {
     fun test4_repeatedAccidentalTapNoStateChange_filtered() {
         val t0 = 1000L
         val action1 = createActionEvent("a1", t0, "CLICK", "Button", "Item", "com.example.targetapp:id/item")
-        val stateEv1 = StateEvent("s1", t0 + 10L, createDummyState("state_list"), createDummyState("state_detail"), "a1")
+        val stateEv1 = StateEvent(stateEventId = "s1", timestamp = t0 + 10L, beforeState = createDummyState("state_list"), afterState = createDummyState("state_detail"), causeActionId = "a1")
         // Rapid duplicate tap 100ms later on same target without state change
         val action2 = createActionEvent("a2", t0 + 100L, "CLICK", "Button", "Item", "com.example.targetapp:id/item")
 
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_4",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 200L,
             traceEvents = listOf(
                 TraceEvent.Action("a1", t0, action1),
                 TraceEvent.State("s1", t0 + 10L, stateEv1),
@@ -169,10 +161,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_5",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action)),
             userActions = listOf(action)
         )
@@ -191,10 +181,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_6",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action)),
             userActions = listOf(action)
         )
@@ -212,10 +200,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_7",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action)),
             userActions = listOf(action)
         )
@@ -234,10 +220,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_8",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, action)),
             userActions = listOf(action)
         )
@@ -251,7 +235,7 @@ class BonusTeachingFilterTest {
     fun test9_interleavedIrrelevantActions_meaningfulActionsRemainIntact() {
         val t0 = 1000L
         val action1 = createActionEvent("a1", t0, "CLICK", "Button", "Open Search", "com.example.targetapp:id/open_search")
-        val stateEv1 = StateEvent("s1", t0 + 10L, createDummyState("s0"), createDummyState("s1"), "a1")
+        val stateEv1 = StateEvent(stateEventId = "s1", timestamp = t0 + 10L, beforeState = createDummyState("s0"), afterState = createDummyState("s1"), causeActionId = "a1")
         // Irrelevant noise 1: transient focus
         val noise1 = createActionEvent("n1", t0 + 50L, "FOCUS", "View", null, null)
         // Irrelevant noise 2: rapid duplicate click
@@ -262,10 +246,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_9",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 300L,
             traceEvents = listOf(
                 TraceEvent.Action("a1", t0, action1),
                 TraceEvent.State("s1", t0 + 10L, stateEv1),
@@ -294,10 +276,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_10",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 50L,
             traceEvents = listOf(
                 TraceEvent.Action("a1", t0, a1),
                 TraceEvent.Action("n1", t0 + 10L, n1),
@@ -320,10 +300,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_11",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 600L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, a1), TraceEvent.Action("a2", t0 + 500L, a2)),
             userActions = listOf(a1, a2)
         )
@@ -343,10 +321,8 @@ class BonusTeachingFilterTest {
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "trace_12",
-            sessionId = "session_1",
+            timestamp = t0,
             appContext = "com.example.targetapp",
-            startTime = t0,
-            endTime = t0 + 100L,
             traceEvents = listOf(TraceEvent.Action("a1", t0, a1), TraceEvent.Action("n1", t0 + 10L, n1)),
             userActions = listOf(a1, n1)
         )

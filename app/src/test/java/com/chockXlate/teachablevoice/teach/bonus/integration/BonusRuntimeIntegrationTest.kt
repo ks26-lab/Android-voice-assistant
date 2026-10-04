@@ -25,18 +25,19 @@ class BonusRuntimeIntegrationTest {
         val realTrace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "real_trace_101",
+            timestamp = 1000L,
             appContext = "com.real.app",
             userActions = listOf(
-                ActionEvent(actionId = "a1", actionType = "CLICK", semanticSelector = SemanticSelector(text = "Search")),
-                ActionEvent(actionId = "a2", actionType = "FOCUS", semanticSelector = SemanticSelector(role = "View")), // Irrelevant focus
-                ActionEvent(actionId = "a3", actionType = "INPUT_TEXT", inputData = "real_query", semanticSelector = SemanticSelector(textSlot = "query"))
+                ActionEvent(actionId = "a1", timestamp = 1000L, actionType = "CLICK", semanticSelector = SemanticSelector(text = "Search")),
+                ActionEvent(actionId = "a2", timestamp = 1010L, actionType = "FOCUS", semanticSelector = SemanticSelector(role = "View")), // Irrelevant focus
+                ActionEvent(actionId = "a3", timestamp = 1020L, actionType = "INPUT_TEXT", inputData = "real_query", semanticSelector = SemanticSelector(textSlot = "query"))
             )
         )
 
         val filteredResult = coordinator.processCapturedTeachingTrace(realTrace)
 
         assertNotNull(filteredResult)
-        assertEquals("real_trace_101", filteredResult!!.originalSessionId)
+        assertEquals("real_trace_101", filteredResult!!.traceId)
         assertEquals(3, filteredResult.originalEventCount)
         assertEquals(2, filteredResult.retainedEventCount) // Action a2 filtered
         assertEquals(1, filteredResult.removedEventCount)
@@ -56,8 +57,8 @@ class BonusRuntimeIntegrationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "s1",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(role = "android.widget.EditText", text = "Search catalog")
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(role = "android.widget.EditText", text = "Search catalog")
                 )
             )
         )
@@ -94,8 +95,8 @@ class BonusRuntimeIntegrationTest {
                 WorkflowSlot(name = "user_param", type = SlotType.TEXT, required = true, provenance = "user_input")
             ),
             steps = listOf(
-                WorkflowStep(stepId = "step_0", actionType = "CLICK", targetSelector = SemanticSelector(text = "Start")),
-                WorkflowStep(stepId = "step_1", actionType = "INPUT_TEXT", targetSelector = SemanticSelector(textSlot = "user_param"))
+                WorkflowStep(stepId = "step_0", semanticAction = "CLICK", semanticSelector = SemanticSelector(text = "Start")),
+                WorkflowStep(stepId = "step_1", semanticAction = "INPUT_TEXT", semanticSelector = SemanticSelector(textSlot = "user_param"))
             )
         )
 
@@ -134,7 +135,7 @@ class BonusRuntimeIntegrationTest {
                 WorkflowSlot(name = "dynamic_slot", type = SlotType.TEXT, required = true, provenance = "user_input")
             ),
             steps = listOf(
-                WorkflowStep(stepId = "s1", actionType = "INPUT_TEXT", targetSelector = SemanticSelector(textSlot = "dynamic_slot"))
+                WorkflowStep(stepId = "s1", semanticAction = "INPUT_TEXT", semanticSelector = SemanticSelector(textSlot = "dynamic_slot"))
             )
         )
 

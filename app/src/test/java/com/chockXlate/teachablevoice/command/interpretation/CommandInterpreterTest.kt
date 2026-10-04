@@ -381,4 +381,150 @@ class CommandInterpreterTest {
 
         assertEquals("1.0", decoded.schemaVersion)
     }
+
+    // =========================================================================
+    // PHASE 4.1 TEST MATRIX
+    // =========================================================================
+
+    // PH4.1-T1 — Basic shopping command
+    @Test
+    fun testPH4_1_T1_BasicShoppingCommand() {
+        val result = CommandInterpreter.understandCommand("Order a white shirt from Myntra")
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("White Shirt", result.item)
+        assertEquals("Myntra", result.platform)
+        assertEquals("UNDERSTOOD", result.status)
+    }
+
+    // PH4.1-T2 — Paraphrase
+    @Test
+    fun testPH4_1_T2_Paraphrase() {
+        val result = CommandInterpreter.understandCommand("Can you get me a white shirt through Myntra?")
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("White Shirt", result.item)
+        assertEquals("Myntra", result.platform)
+        assertEquals("UNDERSTOOD", result.status)
+    }
+
+    // PH4.1-T3 — Quantity
+    @Test
+    fun testPH4_1_T3_Quantity() {
+        val resultDigits = CommandInterpreter.understandCommand("Buy 2 white shirts from Myntra")
+        assertEquals("2", resultDigits.quantity)
+        assertEquals("White Shirt", resultDigits.item)
+        assertEquals("Myntra", resultDigits.platform)
+
+        val resultWords = CommandInterpreter.understandCommand("Get three pairs of socks from Myntra")
+        assertEquals("3", resultWords.quantity)
+        assertEquals("Socks", resultWords.item)
+        assertEquals("Myntra", resultWords.platform)
+    }
+
+    // PH4.1-T4 — Food ordering
+    @Test
+    fun testPH4_1_T4_FoodOrdering() {
+        val result = CommandInterpreter.understandCommand("Order dinner from Swiggy")
+        assertEquals("order_food", result.intent.canonicalName)
+        assertEquals("Swiggy", result.platform)
+    }
+
+    // PH4.1-T5 — Search
+    @Test
+    fun testPH4_1_T5_Search() {
+        val result = CommandInterpreter.understandCommand("Search for wireless headphones")
+        assertEquals("search_information", SemanticCommandPolicy.canonicalizeIntent(result.intent.canonicalName))
+        assertEquals("wireless headphones", result.query)
+        assertEquals("wireless headphones", result.item)
+    }
+
+    // PH4.1-T6 — Missing platform
+    @Test
+    fun testPH4_1_T6_MissingPlatform() {
+        val result = CommandInterpreter.understandCommand("Buy a white shirt")
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("White Shirt", result.item)
+        assertNull("Platform must not be fabricated when unspecified", result.platform)
+    }
+
+    // PH4.1-T7 — Missing item (Placeholder "something")
+    @Test
+    fun testPH4_1_T7_MissingItem() {
+        val result = CommandInterpreter.understandCommand("Buy something from Myntra")
+        assertEquals("Myntra", result.platform)
+        assertTrue("Item must be marked as unresolved", result.unresolvedItems.contains("item"))
+        assertEquals("NEEDS_CLARIFICATION", result.status)
+    }
+
+    // PH4.1-T8 — Ambiguous reference ("Order it")
+    @Test
+    fun testPH4_1_T8_AmbiguousReference() {
+        val result = CommandInterpreter.understandCommand("Order it")
+        assertEquals("NEEDS_CLARIFICATION", result.status)
+        assertTrue("Item must be marked as unresolved", result.unresolvedItems.contains("item"))
+    }
+
+    // PH4.1-T9 — Multi-app command
+    @Test
+    fun testPH4_1_T9_MultiAppCommand() {
+        val result = CommandInterpreter.understandCommand("Find a white shirt on Myntra and send the link to me on Telegram")
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("Myntra", result.shoppingPlatform)
+        assertEquals("Telegram", result.messagingPlatform)
+        assertEquals("White Shirt", result.item)
+    }
+
+    // PH4.1-T10 — Navigation discrimination
+    @Test
+    fun testPH4_1_T10_NavigationDiscrimination() {
+        val result = CommandInterpreter.understandCommand("Open Amazon")
+        org.junit.Assert.assertNotEquals("shop_item", result.intent.canonicalName)
+    }
+
+    // PH4.1-T11 — Settings discrimination
+    @Test
+    fun testPH4_1_T11_SettingsDiscrimination() {
+        val result = CommandInterpreter.understandCommand("Open Amazon settings")
+        org.junit.Assert.assertNotEquals("shop_item", result.intent.canonicalName)
+    }
+
+    // PH4.1-T12 — Security boundary (OTP / payment)
+    @Test
+    fun testPH4_1_T12_SecurityBoundary() {
+        val result = CommandInterpreter.understandCommand("Enter my OTP and complete the payment")
+        assertTrue("Must detect sensitive operations", result.isSensitive)
+        assertTrue("Diagnostics must explain safety boundaries", result.diagnostics.any { it.contains("SafetyGate", ignoreCase = true) })
+    }
+
+    // PH4.1-T13 — Unknown command
+    @Test
+    fun testPH4_1_T13_UnknownCommand() {
+        val result = CommandInterpreter.understandCommand("Do something useful with my phone")
+        assertTrue("Status must be UNKNOWN or UNKNOWN_INTENT", result.status == "UNKNOWN" || result.status == "UNKNOWN_INTENT")
+        assertEquals("unknown", result.intent.canonicalName)
+    }
+
+    // PH4.1-T14 — Original transcript preservation
+    @Test
+    fun testPH4_1_T14_OriginalTranscriptPreservation() {
+        val raw = "Hey, could you please get me two black shirts from Myntra?"
+        val result = CommandInterpreter.understandCommand(raw)
+        assertEquals(raw, result.originalTranscript)
+        assertEquals(raw, result.rawCommand)
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("2", result.quantity)
+        assertEquals("Black Shirt", result.item)
+        assertEquals("Myntra", result.platform)
+    }
+
+    // KILL TEST — Amazon-taught workflow vs Myntra blue jacket command
+    @Test
+    fun testKillTest_CommandUnderstandingWithoutHardcoding() {
+        val result = CommandInterpreter.understandCommand("Can you get me a blue jacket from Myntra?")
+        assertEquals("shop_item", result.intent.canonicalName)
+        assertEquals("Blue Jacket", result.item)
+        assertEquals("Myntra", result.platform)
+        assertEquals("UNDERSTOOD", result.status)
+        assertFalse("Must not be sensitive", result.isSensitive)
+    }
 }
+

@@ -24,8 +24,8 @@ class AdversarialMidFlowClarificationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "s0",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_name")
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_name")
                 )
             )
         )

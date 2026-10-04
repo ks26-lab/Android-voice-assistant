@@ -44,6 +44,37 @@ internal object TeachingPrivacyGuard {
         }
     }
 
+    fun protectedField(node: AccessibilityNodeSource): Boolean {
+        return try {
+            val variation = node.inputType and InputType.TYPE_MASK_VARIATION
+            val inputClass = node.inputType and InputType.TYPE_MASK_CLASS
+            node.isPassword ||
+                (inputClass == InputType.TYPE_CLASS_TEXT && variation in setOf(
+                    InputType.TYPE_TEXT_VARIATION_PASSWORD, InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
+                    InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)) ||
+                (inputClass == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    fun isSensitiveCredentialTarget(node: AccessibilityNodeSource): Boolean {
+        return try {
+            if (protectedField(node)) return true
+            if (node.isEditable) {
+                val labels = listOfNotNull(
+                    node.viewIdResourceName,
+                    node.contentDescription?.toString(),
+                    node.text?.toString()
+                )
+                if (labels.any(policy::credentialText)) return true
+            }
+            false
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
     /**
      * Determines whether a normalized UiElement represents an editable credential target.
      */

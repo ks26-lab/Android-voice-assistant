@@ -738,4 +738,585 @@ class ExecutionRequestBuilderTest {
         assertEquals(request.boundSlots, deserialized.boundSlots)
         assertEquals(request.version, deserialized.version)
     }
+
+    // =========================================================================
+    // PHASE 4.3 TEST MATRIX (PH4.3-T1 through PH4.3-T18 + End-to-End + Kill Test)
+    // =========================================================================
+
+    // --- PH4.3-T1 — Basic variable binding ---
+    @Test
+    fun testPH4_3_T1_BasicVariableBinding() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_basic",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "\${platform}", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Can you get me a blue jacket from Myntra?")
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertNotNull(buildResult.executionRequest)
+        assertEquals("Blue Jacket", buildResult.executionRequest?.boundSlots?.get("item"))
+        assertEquals("Myntra", buildResult.executionRequest?.boundSlots?.get("platform"))
+    }
+
+    // --- PH4.3-T2 — Quantity binding ---
+    @Test
+    fun testPH4_3_T2_QuantityBinding() {
+        val wf = createWorkflow(
+            skillId = "skill_qty_bind",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}", provenance = "variable"),
+                WorkflowSlot(name = "quantity", type = SlotType.INTEGER, required = true, exampleValue = "\${quantity}", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order 3 blue jackets")
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals("3", buildResult.executionRequest?.boundSlots?.get("quantity"))
+    }
+
+    // --- PH4.3-T3 — Demonstration value must not leak ---
+    @Test
+    fun testPH4_3_T3_DemonstrationValueMustNotLeak() {
+        val wf = createWorkflow(
+            skillId = "skill_no_leak",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Get me a blue jacket from Myntra")
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        val bound = buildResult.executionRequest?.boundSlots!!
+        assertEquals("Blue Jacket", bound["item"])
+        assertEquals("Myntra", bound["platform"])
+        assertFalse(bound["item"] == "white shirt")
+        assertFalse(bound["platform"] == "Amazon")
+    }
+
+    // --- PH4.3-T4 — Template substitution ---
+    @Test
+    fun testPH4_3_T4_TemplateSubstitution() {
+        val searchStep = WorkflowStep(
+            stepId = "step_search",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = SemanticSelector(role = "EditText", resourceId = "com.shop:id/search"),
+            parameters = mapOf("value" to "\${item}")
+        )
+        val wf = Workflow(
+            skillId = "skill_tmpl_sub",
+            name = "Shop Item",
+            intent = "shop_item",
+            appContext = "com.shop",
+            slots = listOf(WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}")),
+            steps = listOf(searchStep),
+            safetyBoundary = SafetyBoundary()
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Search Blue Jacket")
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals(1, buildResult.boundSteps.size)
+        assertEquals("Blue Jacket", buildResult.boundSteps[0].inputText)
+        // Stored workflow remains untouched
+        assertEquals("\${item}", wf.steps[0].parameters["value"])
+    }
+
+    // --- PH4.3-T5 — Quantity template ---
+    @Test
+    fun testPH4_3_T5_QuantityTemplate() {
+        val qtyStep = WorkflowStep(
+            stepId = "step_qty_set",
+            semanticAction = "SET_TEXT",
+            semanticSelector = SemanticSelector(role = "EditText", resourceId = "com.shop:id/qty"),
+            parameters = mapOf("value" to "\${quantity}")
+        )
+        val wf = Workflow(
+            skillId = "skill_qty_tmpl",
+            name = "Shop Item",
+            intent = "shop_item",
+            appContext = "com.shop",
+            slots = listOf(WorkflowSlot(name = "quantity", type = SlotType.INTEGER, required = true, exampleValue = "\${quantity}")),
+            steps = listOf(qtyStep),
+            safetyBoundary = SafetyBoundary()
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Set quantity to 3")
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals(1, buildResult.boundSteps.size)
+        assertEquals("3", buildResult.boundSteps[0].inputText)
+    }
+
+    // --- PH4.3-T6 — Platform role binding ---
+    @Test
+    fun testPH4_3_T6_PlatformRoleBinding() {
+        val wf = createWorkflow(
+            skillId = "skill_platform_role",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "shopping_platform", type = SlotType.PLATFORM, role = "shopping_platform", required = true)
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy headphones from Myntra",
+            normalizedCommand = "buy headphones from myntra",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "shopping_platform", type = SlotType.PLATFORM, rawValue = "Myntra", typedValue = "Myntra", role = "shopping_platform")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals("Myntra", buildResult.executionRequest?.boundSlots?.get("shopping_platform"))
+        assertFalse(buildResult.executionRequest?.boundSlots?.values?.contains("com.myntra.android") == true)
+    }
+
+    // --- PH4.3-T7 — Multi-app role binding ---
+    @Test
+    fun testPH4_3_T7_MultiAppRoleBinding() {
+        val wf = createWorkflow(
+            skillId = "skill_multi_app",
+            intent = "share_product",
+            slots = listOf(
+                WorkflowSlot(name = "shopping_platform", type = SlotType.PLATFORM, role = "shopping_platform", required = true),
+                WorkflowSlot(name = "messaging_platform", type = SlotType.PLATFORM, role = "messaging_platform", required = true)
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Find a white shirt on Myntra and send the link to me on Telegram",
+            normalizedCommand = "find a white shirt on myntra and send the link to me on telegram",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "share_product", category = "cross_app", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "shopping_platform", type = SlotType.PLATFORM, rawValue = "Myntra", typedValue = "Myntra", role = "shopping_platform"),
+                CommandSlot(name = "messaging_platform", type = SlotType.PLATFORM, rawValue = "Telegram", typedValue = "Telegram", role = "messaging_platform")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals("Myntra", buildResult.executionRequest?.boundSlots?.get("shopping_platform"))
+        assertEquals("Telegram", buildResult.executionRequest?.boundSlots?.get("messaging_platform"))
+    }
+
+    // --- PH4.3-T8 — Missing required slot ---
+    @Test
+    fun testPH4_3_T8_MissingRequiredSlot() {
+        val wf = createWorkflow(
+            skillId = "skill_req_plat",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy a white shirt",
+            normalizedCommand = "buy a white shirt",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "item", type = SlotType.TEXT, rawValue = "white shirt", typedValue = "White Shirt")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.NEEDS_CLARIFICATION, buildResult.status)
+        assertNull(buildResult.executionRequest)
+        assertTrue(buildResult.missingSlots.contains("platform"))
+    }
+
+    // --- PH4.3-T9 — Unresolved reference ---
+    @Test
+    fun testPH4_3_T9_UnresolvedReference() {
+        val wf = createWorkflow(
+            skillId = "skill_ref_slot",
+            intent = "order_food",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Order it from Swiggy",
+            normalizedCommand = "order it from swiggy",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "order_food", category = "food", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "item", type = SlotType.TEXT, rawValue = "it", typedValue = "it", status = com.chockXlate.teachablevoice.command.interpretation.CommandSlotStatus.REFERENCE),
+                CommandSlot(name = "platform", type = SlotType.PLATFORM, rawValue = "Swiggy", typedValue = "Swiggy")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.NEEDS_CLARIFICATION, buildResult.status)
+        assertNull(buildResult.executionRequest)
+        assertTrue(buildResult.missingSlots.contains("item"))
+    }
+
+    // --- PH4.3-T10 — Constant conflict ---
+    @Test
+    fun testPH4_3_T10_ConstantConflict() {
+        val wf = createWorkflow(
+            skillId = "skill_const_conflict_plat",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "constant")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy a white shirt from Myntra",
+            normalizedCommand = "buy a white shirt from myntra",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "platform", type = SlotType.PLATFORM, rawValue = "Myntra", typedValue = "Myntra")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.BINDING_CONFLICT, buildResult.status)
+        assertNull(buildResult.executionRequest)
+    }
+
+    // --- PH4.3-T11 — Constant compatible ---
+    @Test
+    fun testPH4_3_T11_ConstantCompatible() {
+        val wf = createWorkflow(
+            skillId = "skill_const_compat_plat",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "constant")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy a white shirt from Amazon",
+            normalizedCommand = "buy a white shirt from amazon",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "platform", type = SlotType.PLATFORM, rawValue = "Amazon", typedValue = "Amazon")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals("Amazon", buildResult.executionRequest?.boundSlots?.get("platform"))
+    }
+
+    // --- PH4.3-T12 — Wrong slot type ---
+    @Test
+    fun testPH4_3_T12_WrongSlotType() {
+        val wf = createWorkflow(
+            skillId = "skill_wrong_type",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "quantity", type = SlotType.INTEGER, required = true)
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy some shirts",
+            normalizedCommand = "buy some shirts",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "quantity", type = SlotType.TEXT, rawValue = "invalid text", typedValue = "invalid text")
+            )
+        )
+        val match = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, match, repository)
+
+        assertEquals(ExecutionRequestStatus.INVALID, buildResult.status)
+        assertNull(buildResult.executionRequest)
+    }
+
+    // --- PH4.3-T13 — Unknown match ---
+    @Test
+    fun testPH4_3_T13_UnknownMatch() {
+        val cmd = CommandInterpreter.understandCommand("Book a flight to Mars")
+        val matchResult = matcher.match(cmd)
+        assertEquals(SkillMatchStatus.UNKNOWN, matchResult.status)
+
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+        assertNull(buildResult.executionRequest)
+        assertEquals(ExecutionRequestStatus.REJECTED_UNKNOWN_MATCH, buildResult.status)
+    }
+
+    // --- PH4.3-T14 — Ambiguous match ---
+    @Test
+    fun testPH4_3_T14_AmbiguousMatch() {
+        val wf1 = createWorkflow(skillId = "skill_amb_a", intent = "shop_item")
+        val wf2 = createWorkflow(skillId = "skill_amb_b", intent = "shop_item")
+        repository.saveWorkflow(wf1)
+        repository.saveWorkflow(wf2)
+
+        val cmd = CommandInterpreter.understandCommand("Shop item")
+        val matchResult = matcher.match(cmd)
+        assertEquals(SkillMatchStatus.AMBIGUOUS, matchResult.status)
+
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+        assertNull(buildResult.executionRequest)
+        assertEquals(ExecutionRequestStatus.REJECTED_AMBIGUOUS_MATCH, buildResult.status)
+    }
+
+    // --- PH4.3-T15 — Phase 4.1 clarification ---
+    @Test
+    fun testPH4_3_T15_Phase41Clarification() {
+        val wf = createWorkflow(skillId = "skill_shop_clarify", intent = "shop_item")
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Buy something from Myntra",
+            normalizedCommand = "buy something from myntra",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            status = "NEEDS_CLARIFICATION",
+            unresolvedItems = listOf("item")
+        )
+        val matchResult = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+
+        assertNull(buildResult.executionRequest)
+        assertEquals(ExecutionRequestStatus.NEEDS_CLARIFICATION, buildResult.status)
+    }
+
+    // --- PH4.3-T16 — Sensitive command propagation ---
+    @Test
+    fun testPH4_3_T16_SensitiveCommandPropagation() {
+        val wf = createWorkflow(
+            skillId = "skill_sensitive_checkout",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandUnderstandingResult(
+            rawCommand = "Proceed to payment and complete checkout for shoes",
+            normalizedCommand = "proceed to payment and complete checkout for shoes",
+            intent = com.chockXlate.teachablevoice.learning.intent.Intent(canonicalName = "shop_item", category = "shopping", confidence = 1.0),
+            intentConfidence = 1.0,
+            slots = listOf(
+                CommandSlot(name = "item", type = SlotType.TEXT, rawValue = "shoes", typedValue = "Shoes")
+            ),
+            isSensitive = true
+        )
+        val matchResult = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertNotNull(buildResult.executionRequest)
+        assertTrue(buildResult.executionRequest!!.isSensitive)
+    }
+
+    // --- PH4.3-T17 — Stored workflow immutability ---
+    @Test
+    fun testPH4_3_T17_StoredWorkflowImmutability() {
+        val searchStep = WorkflowStep(
+            stepId = "step_search",
+            semanticAction = "INPUT_TEXT",
+            semanticSelector = SemanticSelector(role = "EditText", resourceId = "com.shop:id/search"),
+            parameters = mapOf("value" to "\${item}")
+        )
+        val wf = Workflow(
+            skillId = "skill_immutable_check",
+            name = "Shop Item",
+            intent = "shop_item",
+            appContext = "com.shop",
+            slots = listOf(WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}")),
+            steps = listOf(searchStep),
+            safetyBoundary = SafetyBoundary()
+        )
+        repository.saveWorkflow(wf)
+
+        // Verify state before binding
+        assertEquals("\${item}", wf.slots[0].exampleValue)
+        assertEquals("\${item}", wf.steps[0].parameters["value"])
+
+        val cmd = CommandInterpreter.understandCommand("Search Blue Jacket")
+        val matchResult = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        assertEquals("Blue Jacket", buildResult.executionRequest?.boundSlots?.get("item"))
+
+        // Verify stored workflow in repo and in memory is strictly unchanged
+        val storedWf = repository.getWorkflowById("skill_immutable_check")!!
+        assertEquals("\${item}", storedWf.slots[0].exampleValue)
+        assertEquals("\${item}", storedWf.steps[0].parameters["value"])
+        assertEquals("\${item}", wf.slots[0].exampleValue)
+        assertEquals("\${item}", wf.steps[0].parameters["value"])
+    }
+
+    // --- PH4.3-T18 — No package mapping ---
+    @Test
+    fun testPH4_3_T18_NoPackageMapping() {
+        val wf = createWorkflow(
+            skillId = "skill_pkg_check",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "\${platform}")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Buy jacket from Myntra")
+        val matchResult = matcher.match(cmd)
+        val buildResult = ExecutionRequestBuilder.build(cmd, matchResult, repository)
+
+        assertEquals(ExecutionRequestStatus.SUCCESS, buildResult.status)
+        val plat = buildResult.executionRequest?.boundSlots?.get("platform")
+        assertEquals("Myntra", plat)
+        assertFalse("com.myntra.android" == plat)
+    }
+
+    // =========================================================================
+    // END-TO-END PHASE 4.3 TEST (Phase 4.1 -> Phase 4.2 -> Phase 4.3)
+    // =========================================================================
+    @Test
+    fun testEndToEndPhase4_3() {
+        // Teach: "Order a white shirt from Amazon"
+        val taughtWorkflow = createWorkflow(
+            skillId = "skill_learned_shopping",
+            name = "Order a white shirt from Amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(taughtWorkflow)
+
+        // Runtime: "Can you get me a blue jacket from Myntra?"
+        // Phase 4.1: Command Understanding
+        val phase41Result = CommandInterpreter.understandCommand("Can you get me a blue jacket from Myntra?")
+        assertEquals("shop_item", phase41Result.intent.canonicalName)
+        assertEquals("Blue Jacket", phase41Result.item)
+        assertEquals("Myntra", phase41Result.platform)
+
+        // Phase 4.2: Skill Matching
+        val phase42Result = matcher.match(phase41Result)
+        assertEquals(SkillMatchStatus.MATCHED, phase42Result.status)
+        assertEquals("skill_learned_shopping", phase42Result.selectedSkillId)
+        assertNotNull(phase42Result.selectedWorkflow)
+
+        // Phase 4.3: Runtime Slot Binding & ExecutionRequest Construction
+        val phase43Result = ExecutionRequestBuilder.build(phase41Result, phase42Result, repository)
+        assertEquals(ExecutionRequestStatus.SUCCESS, phase43Result.status)
+
+        val req = phase43Result.executionRequest
+        assertNotNull(req)
+        assertEquals("skill_learned_shopping", req!!.skillId)
+        assertEquals("Blue Jacket", req.boundSlots["item"])
+        assertEquals("Myntra", req.boundSlots["platform"])
+
+        // Immutability confirmation: stored workflow untouched
+        val stored = repository.getWorkflowById("skill_learned_shopping")!!
+        assertEquals("white shirt", stored.slots.find { it.name == "item" }?.exampleValue)
+        assertEquals("Amazon", stored.slots.find { it.name == "platform" }?.exampleValue)
+    }
+
+    // =========================================================================
+    // KILL TEST (Mandatory)
+    // =========================================================================
+    @Test
+    fun testKillTestPhase4_3() {
+        val taughtWorkflow = createWorkflow(
+            skillId = "skill_kill_test_shopping",
+            name = "Order a white shirt from Amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(taughtWorkflow)
+
+        val runtimeCommand = "Can you get me a blue jacket from Myntra?"
+
+        // Phase 4.1
+        val understanding = CommandInterpreter.understandCommand(runtimeCommand)
+        assertEquals("shop_item", understanding.intent.canonicalName)
+        assertEquals("Blue Jacket", understanding.item)
+        assertEquals("Myntra", understanding.platform)
+
+        // Phase 4.2
+        val match = matcher.match(understanding)
+        assertEquals(SkillMatchStatus.MATCHED, match.status)
+        assertEquals("skill_kill_test_shopping", match.selectedSkillId)
+
+        // Phase 4.3
+        val buildResult = ExecutionRequestBuilder.build(understanding, match, repository)
+        assertEquals(ExecutionRequestStatus.READY_FOR_PERSON_2, buildResult.status)
+
+        val req = buildResult.executionRequest
+        assertNotNull(req)
+        assertEquals("skill_kill_test_shopping", req!!.skillId)
+        assertEquals("Blue Jacket", req.boundSlots["item"])
+        assertEquals("Myntra", req.boundSlots["platform"])
+
+        // Invariant: Demonstration values never leaked
+        assertFalse("white shirt" == req.boundSlots["item"])
+        assertFalse("Amazon" == req.boundSlots["platform"])
+
+        // Invariant: Stored workflow not mutated
+        val storedWf = repository.getWorkflowById("skill_kill_test_shopping")!!
+        assertEquals("white shirt", storedWf.slots.find { it.name == "item" }?.exampleValue)
+        assertEquals("Amazon", storedWf.slots.find { it.name == "platform" }?.exampleValue)
+
+        // Invariant: No package mapping
+        assertFalse(req.boundSlots.containsValue("com.myntra.android"))
+        assertFalse(req.boundSlots.containsValue("com.amazon.mShop.android.shopping"))
+
+        // Invariant: No UI execution occurred
+        assertTrue(buildResult.diagnostics.none { it.contains("AccessibilityNodeInfo") })
+        assertTrue(buildResult.diagnostics.none { it.contains("performAction") })
+    }
 }

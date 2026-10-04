@@ -7,14 +7,15 @@ import com.chockXlate.teachablevoice.runtime.slots.BoundStep
 import com.chockXlate.teachablevoice.safety.SafetyGate
 
 enum class RuntimeAction {
-    CLICK, INPUT_TEXT, LONG_PRESS, SCROLL;
+    CLICK, INPUT_TEXT, LONG_PRESS, SCROLL, BACK;
 
     companion object {
         fun parse(value: String): RuntimeAction? = when (value.trim().uppercase()) {
             "CLICK", "TAP" -> CLICK
-            "INPUT_TEXT" -> INPUT_TEXT
+            "INPUT_TEXT", "SET_TEXT" -> INPUT_TEXT
             "LONG_PRESS" -> LONG_PRESS
             "SCROLL" -> SCROLL
+            "BACK", "NAVIGATE_BACK" -> BACK
             else -> null
         }
     }
@@ -31,8 +32,14 @@ data class ActionOutcome(
     val attempted: Boolean,
     val accepted: Boolean = false,
     val reason: String,
-    val before: UiObservation? = null
-)
+    val before: UiObservation? = null,
+    val targetElementId: String? = null,
+    val isStale: Boolean = false,
+    val isSensitiveBlocked: Boolean = false,
+    val executedAction: RuntimeAction? = null
+) {
+    val status: String get() = if (accepted) "SUCCESS" else if (!attempted) "BLOCKED" else "FAILED"
+}
 
 interface UiDriver {
     fun isReady(): Boolean

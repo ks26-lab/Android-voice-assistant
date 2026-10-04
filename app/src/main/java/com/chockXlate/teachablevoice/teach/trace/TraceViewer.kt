@@ -549,12 +549,19 @@ object TraceViewer {
         sb.appendLine("==================================================")
         sb.appendLine("       PERSON 2 RUNTIME EXECUTION REPORT")
         sb.appendLine("==================================================")
-        sb.appendLine("EXECUTION ID   : ${result.executionId}")
+        sb.appendLine("EXECUTION ID   : ${report.executionId}")
         sb.appendLine("SKILL ID       : ${trace.skillId}")
+        sb.appendLine("FINAL STATUS   : ${report.finalStatus}")
         sb.appendLine("FINAL STATE    : ${result.finalState}")
         sb.appendLine("SUCCESS        : ${if (result.success) "YES ✓" else "NO ✗"}")
-        sb.appendLine("STEPS COMPLETED: ${result.stepsCompleted} / ${result.totalSteps}")
-        sb.appendLine("DURATION       : ${result.durationMs} ms")
+        sb.appendLine("STEPS COMPLETED: ${report.stepsCompleted} / ${report.stepsTotal}")
+        sb.appendLine("DURATION       : ${report.durationMs} ms")
+        if (!report.originalCommand.isNullOrBlank()) {
+            sb.appendLine("ORIGINAL CMD   : \"${report.originalCommand}\"")
+        }
+        if (report.boundSlots.isNotEmpty()) {
+            sb.appendLine("BOUND SLOTS    : ${report.boundSlots}")
+        }
         if (report.stoppedStepId != null) {
             sb.appendLine("STOPPED STEP   : ${report.stoppedStepId}")
         }
@@ -567,6 +574,20 @@ object TraceViewer {
             sb.appendLine(">>> AUTOMATION PAUSED — USER ACTION REQUIRED <<<")
             sb.appendLine("Handoff Reason: ${result.errorMessage ?: "User confirmation required."}")
             sb.appendLine("Safety boundary active. No further automated Accessibility actions are allowed until explicit reset.")
+            sb.appendLine("--------------------------------------------------")
+        }
+
+        if (report.stepReports.isNotEmpty()) {
+            sb.appendLine("STEP REPORTS (${report.stepReports.size}):")
+            report.stepReports.forEach { s ->
+                sb.appendLine("  [Step ${s.stepIndex + 1}: ${s.stepId}] ${s.actionType} -> ${s.finalStepStatus}")
+                s.targetDescription?.let { sb.appendLine("      Target: $it (Resolution: ${s.targetResolutionStatus ?: "UNKNOWN"}, Conf: ${s.targetConfidence})") }
+                s.actionOutcome?.let { sb.appendLine("      Action Outcome: $it") }
+                s.verificationStatus?.let { sb.appendLine("      Verification: $it (Before: ${s.beforeStateId ?: "none"}, After: ${s.afterStateId ?: "none"})") }
+                if (s.recoveryCount > 0) sb.appendLine("      Recoveries: ${s.recoveryCount}")
+                if (s.clarificationCount > 0) sb.appendLine("      Clarifications: ${s.clarificationCount}")
+                s.reason?.let { sb.appendLine("      Note: $it") }
+            }
             sb.appendLine("--------------------------------------------------")
         }
 
@@ -596,6 +617,15 @@ object TraceViewer {
                     else -> {}
                 }
             }
+        }
+
+        if (report.humanExplanation.isNotBlank()) {
+            sb.appendLine("--------------------------------------------------")
+            sb.appendLine("HUMAN EXPLANATION:")
+            sb.appendLine(report.humanExplanation)
+        }
+        if (report.spokenSummary.isNotBlank()) {
+            sb.appendLine("SPOKEN SUMMARY : \"${report.spokenSummary}\"")
         }
 
         sb.appendLine("==================================================")

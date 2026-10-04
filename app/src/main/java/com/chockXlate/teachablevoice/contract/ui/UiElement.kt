@@ -31,5 +31,13 @@ data class UiElement(
     val isScrollable: Boolean = false,
     val isEnabled: Boolean = true,
     val bounds: UiElementBounds? = null, // Execution-only bounds; NOT used as workflow identity
-    val children: List<UiElement> = emptyList()
-)
+    val children: List<UiElement> = emptyList(),
+    val isVisible: Boolean = true,
+    val isFocused: Boolean = false,
+    val isSensitive: Boolean = false,
+    val className: String? = null,
+    val packageName: String? = null
+) {
+    val isActionable: Boolean get() = isVisible && isEnabled && (isClickable || isEditable || isCheckable || isScrollable)
+}
+

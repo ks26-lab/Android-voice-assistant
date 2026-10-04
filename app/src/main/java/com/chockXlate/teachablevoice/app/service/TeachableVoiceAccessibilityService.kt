@@ -55,7 +55,12 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
 
     var isTeachingModeActive: Boolean = false
     @Volatile var isRuntimeReady: Boolean = false
-        private set
+        internal set
+    @Volatile var latestUiState: UiState? = null
+        internal set
+    private val sequenceCounter = java.util.concurrent.atomic.AtomicLong(0L)
+    var nodeSourceProvider: (() -> AccessibilityNodeSource?)? = null
+    var currentPackageOverride: String? = null
     private var previousUiState: UiState? = null
     private var captureSessionId: String? = null
     var teachingWarning: String? = null
@@ -78,6 +83,11 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+
+        val pkgName = event.packageName?.toString()
+        if (pkgName != null && event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            currentPackageOverride = pkgName
+        }
 
         val isTeaching = isTeachingModeActive || TeachingSessionManager.isTeachingActive()
         if (!isTeaching) return
@@ -120,17 +130,79 @@ open class TeachableVoiceAccessibilityService : AccessibilityService() {
      * Reads and normalizes the current active window UI hierarchy.
      */
     fun captureCurrentUiState(): UiState? {
-        val rootNode = rootInActiveWindow ?: return null
-        val packageName = rootNode.packageName?.toString() ?: "unknown"
-        val windowId = rootNode.windowId
+        val rootSource = nodeSourceProvider?.invoke()
+            ?: rootInActiveWindow?.let { RealAccessibilityNode(it) }
+            ?: return null
+
+        val packageName = currentPackageOverride
+            ?: try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
+            ?: "unknown"
+        val windowId = try { rootInActiveWindow?.windowId ?: 0 } catch (_: Throwable) { 0 }
 
         return try {
-            UiNodeNormalizer.normalizeState(rootNode, packageName, windowId)
+            val state = UiNodeNormalizer.normalizeState(rootSource, packageName, windowId, sequenceCounter.get())
+            latestUiState = state
+            state
         } finally {
-            @Suppress("DEPRECATION")
-            rootNode.recycle()
+            rootSource.recycle()
         }
     }
+
+    /**
+     * Authoritative Phase 4.4 runtime observation method.
+     * Captures current active window hierarchy into a structured UiObservationResult
+     * without executing any action.
+     */
+    fun observeCurrentUiState(): com.chockXlate.teachablevoice.contract.ui.UiObservationResult {
+        val seq = sequenceCounter.incrementAndGet()
+        if (!isRuntimeReady) {
+            return com.chockXlate.teachablevoice.contract.ui.UiObservationResult(
+                status = com.chockXlate.teachablevoice.contract.ui.UiObservationStatus.UNAVAILABLE,
+                sequenceNumber = seq,
+                errorMessage = "Accessibility service is not connected or ready"
+            )
+        }
+
+        val rootSource = nodeSourceProvider?.invoke()
+            ?: rootInActiveWindow?.let { RealAccessibilityNode(it) }
+
+        if (rootSource == null) {
+            return com.chockXlate.teachablevoice.contract.ui.UiObservationResult(
+                status = com.chockXlate.teachablevoice.contract.ui.UiObservationStatus.UNAVAILABLE,
+                sequenceNumber = seq,
+                errorMessage = "Active window root node is unavailable"
+            )
+        }
+
+        val packageName = currentPackageOverride
+            ?: try { rootInActiveWindow?.packageName?.toString() } catch (_: Throwable) { null }
+            ?: "unknown"
+        val windowId = try { rootInActiveWindow?.windowId ?: 0 } catch (_: Throwable) { 0 }
+
+        return try {
+            val state = UiNodeNormalizer.normalizeState(rootSource, packageName, windowId, seq)
+            latestUiState = state
+            com.chockXlate.teachablevoice.contract.ui.UiObservationResult(
+                status = com.chockXlate.teachablevoice.contract.ui.UiObservationStatus.SUCCESS,
+                state = state,
+                sequenceNumber = seq,
+                isSensitive = state.isSensitiveContext
+            )
+        } catch (e: Exception) {
+            com.chockXlate.teachablevoice.contract.ui.UiObservationResult(
+                status = com.chockXlate.teachablevoice.contract.ui.UiObservationStatus.UNAVAILABLE,
+                sequenceNumber = seq,
+                errorMessage = e.message ?: "Failed to normalize UI state"
+            )
+        } finally {
+            rootSource.recycle()
+        }
+    }
+
+    /**
+     * Convenient snapshot getter for runtime phases.
+     */
+    fun getCurrentUIState(): UiState? = observeCurrentUiState().state
 
     /**
      * Logs the current active UI hierarchy for development & debugging.

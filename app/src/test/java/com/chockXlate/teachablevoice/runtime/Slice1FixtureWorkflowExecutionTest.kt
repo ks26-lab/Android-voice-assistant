@@ -36,8 +36,8 @@ class Slice1FixtureWorkflowExecutionTest {
             intent = "order_food",
             appContext = targetApp,
             slots = listOf(
-                WorkflowSlot(slotName = "restaurant_name", slotType = "STRING", isRequired = true),
-                WorkflowSlot(slotName = "item_name", slotType = "STRING", isRequired = true)
+                WorkflowSlot(name = "restaurant_name", type = SlotType.TEXT, required = true),
+                WorkflowSlot(name = "item_name", type = SlotType.TEXT, required = true)
             ),
             steps = listOf(
                 // Step 1: SEARCH
@@ -129,6 +129,12 @@ class Slice1FixtureWorkflowExecutionTest {
         override fun getAllWorkflows(): List<Workflow> = listOf(workflow)
         override fun saveWorkflow(workflow: Workflow): Boolean = true
         override fun deleteWorkflow(skillId: String): Boolean = true
+        override fun createSkill(name: String, description: String, id: String): com.chockXlate.teachablevoice.contract.skill.SkillRecord {
+            return com.chockXlate.teachablevoice.contract.skill.SkillRecord(id = id.ifBlank { "test_id" }, name = name, description = description)
+        }
+        override fun getSkill(id: String): com.chockXlate.teachablevoice.contract.skill.SkillRecord? = null
+        override fun listSkills(): List<com.chockXlate.teachablevoice.contract.skill.SkillRecord> = emptyList()
+        override fun updateSkill(skill: com.chockXlate.teachablevoice.contract.skill.SkillRecord): Boolean = true
     }
 
     private class MockUiDriver(var currentObservation: UiObservation) : UiDriver {
@@ -221,12 +227,13 @@ class Slice1FixtureWorkflowExecutionTest {
     fun test3_SlotsBindCorrectly() {
         val workflow = createOrderFoodWorkflowFixture()
         val request = createExecutionRequestFixture()
-        val boundStep2 = SlotBinder.bind(workflow.steps[1], request.boundSlots)
+        val boundResult = SlotBinder.bind(workflow, request.boundSlots)
+        val boundStep2 = boundResult.steps[1]
 
         assertEquals("Burger Palace", boundStep2.selector.text)
         assertEquals(RuntimeAction.CLICK, boundStep2.action)
 
-        val boundStep1 = SlotBinder.bind(workflow.steps[0], request.boundSlots)
+        val boundStep1 = boundResult.steps[0]
         assertEquals("Burger Palace", boundStep1.inputText)
         assertEquals(RuntimeAction.INPUT_TEXT, boundStep1.action)
     }
@@ -257,11 +264,11 @@ class Slice1FixtureWorkflowExecutionTest {
     fun test5_WorkflowPreconditionMatchesCurrentState() {
         val workflow = createOrderFoodWorkflowFixture()
         val uiObs = createUiState(packageName = targetApp, elements = emptyList())
-        val error = preconditions.evaluate(workflow.steps[0].preconditions, uiObs, targetApp, null)
+        val error = preconditions.evaluate(workflow.steps[0].preconditions, uiObs, targetApp, emptyMap())
         assertNull("Preconditions should match target app package", error)
 
         val wrongUiObs = createUiState(packageName = "com.other.app", elements = emptyList())
-        val wrongError = preconditions.evaluate(workflow.steps[0].preconditions, wrongUiObs, targetApp, null)
+        val wrongError = preconditions.evaluate(workflow.steps[0].preconditions, wrongUiObs, targetApp, emptyMap())
         assertNotNull("Preconditions should fail on mismatched package", wrongError)
     }
 
@@ -315,11 +322,13 @@ class Slice1FixtureWorkflowExecutionTest {
                 UiElement(elementId = "search", role = "EditText", text = "Search")
             )
         )
+        val workflow = createOrderFoodWorkflowFixture()
         val step = BoundStep(
-            stepId = "s1",
+            source = workflow.steps[0],
             action = RuntimeAction.CLICK,
             selector = SemanticSelector(role = "EditText", text = "Search"),
-            confidence = 0.95
+            preconditions = Preconditions(),
+            transition = ExpectedTransition()
         )
         val check = gate.check(boundary, uiObs, step)
         assertNull("Safety gate should allow non-sensitive interaction", check)
@@ -349,7 +358,7 @@ class Slice1FixtureWorkflowExecutionTest {
 
         // Dynamic UI transitions upon action execution
         driver.onExecuteCallback = { executedStep ->
-            when (executedStep.stepId) {
+            when (executedStep.source.stepId) {
                 "step_1_search" -> {
                     // Transition to Restaurant search results
                     driver.currentObservation = createUiState(
@@ -406,14 +415,14 @@ class Slice1FixtureWorkflowExecutionTest {
         val report = runBlockingCoroutine { engine.execute(request) }
 
         // Test 12: ExecutionResult is generated and verified
-        assertEquals(ExecutionState.COMPLETED, report.state)
+        assertEquals(ExecutionState.COMPLETED, report.result.finalState)
         assertTrue(report.result.success)
-        assertEquals(3, report.completedSteps)
-        assertEquals(3, report.totalSteps)
+        assertEquals(3, report.result.stepsCompleted)
+        assertEquals(3, report.result.totalSteps)
         assertEquals(3, driver.actionsExecuted)
-        assertEquals("step_1_search", driver.executedSteps[0].stepId)
-        assertEquals("step_2_select_restaurant", driver.executedSteps[1].stepId)
-        assertEquals("step_3_select_item", driver.executedSteps[2].stepId)
+        assertEquals("step_1_search", driver.executedSteps[0].source.stepId)
+        assertEquals("step_2_select_restaurant", driver.executedSteps[1].source.stepId)
+        assertEquals("step_3_select_item", driver.executedSteps[2].source.stepId)
     }
 
     @Test
@@ -443,9 +452,9 @@ class Slice1FixtureWorkflowExecutionTest {
         assertFalse(report.result.success)
         assertEquals(0, driver.actionsExecuted)
         assertTrue(
-            report.state == ExecutionState.WAITING_FOR_USER ||
-            report.state == ExecutionState.FAILED ||
-            report.state == ExecutionState.ABORTED
+            report.result.finalState == ExecutionState.WAITING_FOR_USER ||
+            report.result.finalState == ExecutionState.FAILED ||
+            report.result.finalState == ExecutionState.ABORTED
         )
     }
 
@@ -484,7 +493,7 @@ class Slice1FixtureWorkflowExecutionTest {
 
         val report = runBlockingCoroutine { engine.execute(request) }
 
-        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.state)
+        assertEquals(ExecutionState.PAUSED_FOR_HANDOFF, report.result.finalState)
         assertFalse(report.result.success)
         assertEquals(0, driver.actionsExecuted)
         assertTrue("Should mention user handoff / sensitive boundary", report.result.errorMessage?.contains("User handoff") == true || report.result.errorMessage?.contains("sensitive") == true)

@@ -7,8 +7,11 @@ enum class RecoveryStrategy {
     RETRY_STEP,
     DISMISS_POPUP_AND_RETRY,
     NAVIGATE_BACK_AND_RETRY,
+    SCROLL_AND_RETRY,
+    REOBSERVE_AND_RETRY,
     HANDOFF_TO_USER,
-    ABORT
+    ABORT,
+    NONE
 }
 
 @Serializable

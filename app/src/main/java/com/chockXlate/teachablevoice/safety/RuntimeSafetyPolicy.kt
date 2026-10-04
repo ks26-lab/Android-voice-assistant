@@ -8,7 +8,7 @@ import com.chockXlate.teachablevoice.runtime.ui.UiObservation
 /** Deliberately conservative: uncertain credential/payment boundaries require human control. */
 class RuntimeSafetyPolicy {
     private val credential = Regex(
-        "(?iu)(\\b(password|passcode|pin|otp|cvv2?|cvc|username|user[ _-]*name|credential|one[ _-]*time[ _-]*(password|code)|verification[ _-]*code|security[ _-]*code|card[ _-]*(number|code)|credit[ _-]*card|debit[ _-]*card|auth[ _-]*token|login|log[ _-]*in|sign[ _-]*in|authenticate|authentication)\\b|पासवर्ड|ओटीपी|पिन|लॉगिन)"
+        "(?iu)(\\b(password|passcode|pin|otp|cvv2?|cvc|username|user[ _-]*name|credential|one[ _-]*time[ _-]*(password|code)|verification[ _-]*code|security[ _-]*code|card[ _-]*(number|code)|credit[ _-]*card|debit[ _-]*card|auth[ _-]*token|login|log[ _-]*in|sign[ _-]*in|authenticate|authentication|captcha|recaptcha|biometric|fingerprint|face[ _-]*unlock)\\b|पासवर्ड|ओटीपी|पिन|लॉगिन)"
     )
     private val payment = Regex(
         "(?iu)(\\b(pay|payment|checkout|place[ _-]*order|confirm[ _-]*(purchase|order|payment)|buy[ _-]*now|complete[ _-]*purchase|banking|transfer[ _-]*funds|confirm[ _-]*(transfer|transaction)|security[ _-]*confirmation)\\b|भुगतान|खरीदें)"
@@ -30,7 +30,9 @@ class RuntimeSafetyPolicy {
     fun evaluate(boundary: SafetyBoundary, ui: UiObservation, step: BoundStep): String? {
         if (boundary.requiresExplicitUserConfirmation) return "This workflow requires explicit user handoff before automation."
         if (boundary.maxAllowedValue != null) return "The declared value limit cannot be verified reliably."
-        if (ui.credentialFieldPresent) return "A protected credential field is visible. Complete authentication manually."
+        if (ui.credentialFieldPresent || ui.state.isSensitiveContext || ui.state.allElements.any { it.isSensitive }) {
+            return "A protected credential or sensitive field is visible. Complete authentication manually."
+        }
         val liveText = ui.state.allElements.flatMap {
             listOfNotNull(it.text, it.contentDescription, it.resourceId, it.nearbyText)
         }

@@ -35,17 +35,18 @@ object SlotBinder {
         require(supplied.keys.all { it in declared }) { "Request contains undeclared slots." }
         val values = mutableMapOf<String, String>()
         for (slot in workflow.slots) {
-            val constant = !slot.required || slot.provenance.equals("constant", true)
+            val isReplaceablePlatform = slot.isPlatformSlot() && !slot.provenance.equals("constant", true)
+            val constant = (!isReplaceablePlatform) && (!slot.required || slot.provenance.equals("constant", true))
             val value = if (constant) {
                 val literal = slot.exampleValue
-                require(literal != null && !literal.startsWith("\${") && !literal.startsWith("{")) {
+                require(literal != null && !literal.startsWith("${'$'}{") && !literal.startsWith("{")) {
                     "A workflow constant has no literal value."
                 }
                 require(supplied[slot.name] == null || supplied[slot.name].equals(literal, true)) {
                     "A supplied value conflicts with a workflow constant."
                 }
                 literal
-            } else supplied[slot.name]
+            } else supplied[slot.name] ?: slot.exampleValue
             require(value != null && value.isNotBlank()) { "A required slot value is missing or blank." }
             require(validType(value, slot.type)) { "A slot value does not satisfy its declared type." }
             require(slot.name != "quantity" || (slot.type == SlotType.INTEGER && value.toIntOrNull() in 1..20)) {
@@ -59,14 +60,17 @@ object SlotBinder {
         }
         fun selector(sel: SemanticSelector, inputTarget: Boolean = false): SemanticSelector {
             require(sel.schemaVersion == "1.0") { "Unsupported selector schema." }
-            if (sel.textSlot == null) return sel
+            val resolvedText = sel.text?.let { t ->
+                if (t.startsWith("${'$'}{") || t.startsWith("{")) resolve(t) else t
+            }
+            if (sel.textSlot == null) return sel.copy(text = resolvedText)
             val value = resolve(sel.textSlot)
             return sel.copy(text = if (inputTarget) null else value, textSlot = null)
         }
         val bound = workflow.steps.flatMap { step ->
             val action = RuntimeAction.parse(step.semanticAction) ?: error("Unsupported semantic action.")
             val supportedKeys = when (action) {
-                RuntimeAction.INPUT_TEXT -> setOf("input_parameter", "input_literal", "text")
+                RuntimeAction.INPUT_TEXT -> setOf("input_parameter", "input_literal", "text", "value")
                 RuntimeAction.SCROLL -> setOf("direction")
                 RuntimeAction.CLICK -> setOf("repeat_slot", "quantity_start", "quantity_selector")
                 else -> emptySet()
@@ -78,7 +82,10 @@ object SlotBinder {
                 step.parameters["input_parameter"]?.let { textValues.add(resolve(it)) }
                 step.parameters["input_literal"]?.let { textValues.add(it) }
                 step.parameters["text"]?.let {
-                    textValues.add(if (it.startsWith("{") || it.startsWith("\${")) resolve(it) else it)
+                    textValues.add(if (it.startsWith("{") || it.startsWith("${'$'}{")) resolve(it) else it)
+                }
+                step.parameters["value"]?.let {
+                    textValues.add(if (it.startsWith("{") || it.startsWith("${'$'}{")) resolve(it) else it)
                 }
                 require(textValues.isNotEmpty()) { "INPUT_TEXT has no explicit input value." }
                 require(textValues.distinct().size == 1) { "Conflicting text input bindings." }
@@ -95,24 +102,41 @@ object SlotBinder {
                     (!bound.resourceId.isNullOrBlank() || !bound.contentDescription.isNullOrBlank())) bound.copy(text = null)
                 else bound
             }
+            val boundPackage = values["platform"] ?: values["target_platform"] ?: values["shopping_platform"]
+            val resolvedReqPkg = when {
+                step.preconditions.requiredPackage?.startsWith("${'$'}{") == true -> resolve(step.preconditions.requiredPackage)
+                step.preconditions.requiredPackage?.startsWith("{") == true -> resolve(step.preconditions.requiredPackage)
+                boundPackage != null && (step.preconditions.requiredPackage == null || step.preconditions.requiredPackage == workflow.appContext) -> boundPackage
+                else -> step.preconditions.requiredPackage
+            }
+            val resolvedExpPkg = when {
+                step.expectedTransition.expectedPackage?.startsWith("${'$'}{") == true -> resolve(step.expectedTransition.expectedPackage)
+                step.expectedTransition.expectedPackage?.startsWith("{") == true -> resolve(step.expectedTransition.expectedPackage)
+                boundPackage != null && (step.expectedTransition.expectedPackage == null || step.expectedTransition.expectedPackage == workflow.appContext) -> boundPackage
+                else -> step.expectedTransition.expectedPackage
+            }
             val single = BoundStep(
                 source = step,
                 action = action,
                 selector = inputIdentity(step.semanticSelector),
-                preconditions = step.preconditions.copy(requiredElementPresent = step.preconditions.requiredElementPresent?.let {
-                    if (it == step.semanticSelector) inputIdentity(it) else selector(it)
-                }),
+                preconditions = step.preconditions.copy(
+                    requiredPackage = resolvedReqPkg,
+                    requiredElementPresent = step.preconditions.requiredElementPresent?.let {
+                        if (it == step.semanticSelector) inputIdentity(it) else selector(it)
+                    }
+                ),
                 transition = step.expectedTransition.copy(
+                    expectedPackage = resolvedExpPkg,
                     expectedElementAppeared = step.expectedTransition.expectedElementAppeared?.let { selector(it) },
                     expectedElementDisappeared = step.expectedTransition.expectedElementDisappeared?.let { selector(it) },
                     expectedEvidence = step.expectedTransition.expectedEvidence.map { req ->
                         req.copy(
                             selector = req.selector?.let { selector(it) },
                             expectedValue = req.expectedValue?.let { v ->
-                                if (v.startsWith("\${") || v.startsWith("{")) resolve(v) else v
+                                if (v.startsWith("${'$'}{") || v.startsWith("{")) resolve(v) else v
                             },
                             previousValue = req.previousValue?.let { v ->
-                                if (v.startsWith("\${") || v.startsWith("{")) resolve(v) else v
+                                if (v.startsWith("${'$'}{") || v.startsWith("{")) resolve(v) else v
                             }
                         )
                     }
@@ -186,7 +210,7 @@ object SlotBinder {
         BindingResult(error = e.message ?: "Slot binding failed.")
     }
 
-    private fun validType(value: String, type: SlotType): Boolean = when (type) {
+    fun validType(value: String, type: SlotType): Boolean = when (type) {
         SlotType.INTEGER -> value.toLongOrNull() != null
         SlotType.DECIMAL -> value.toDoubleOrNull()?.isFinite() == true
         SlotType.BOOLEAN -> value.lowercase() in setOf("true", "false")

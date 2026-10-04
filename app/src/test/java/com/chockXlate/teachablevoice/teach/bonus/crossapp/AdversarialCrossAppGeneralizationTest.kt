@@ -22,8 +22,8 @@ class AdversarialCrossAppGeneralizationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_1",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.EditText",
                         text = "Search product",
                         contentDescription = "Search bar input"
@@ -31,8 +31,8 @@ class AdversarialCrossAppGeneralizationTest {
                 ),
                 WorkflowStep(
                     stepId = "step_2",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.Button",
                         text = "Submit Search",
                         contentDescription = "Go button"

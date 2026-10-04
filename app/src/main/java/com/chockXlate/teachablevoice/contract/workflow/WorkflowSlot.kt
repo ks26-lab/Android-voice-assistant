@@ -9,7 +9,8 @@ enum class SlotType {
     DECIMAL,
     BOOLEAN,
     ENUM,
-    ADDRESS
+    ADDRESS,
+    PLATFORM
 }
 
 @Serializable
@@ -20,5 +21,11 @@ data class WorkflowSlot(
     val required: Boolean = true,
     val exampleValue: String? = null,
     val confidence: Double = 1.0,
-    val provenance: String = "demonstration"
-)
+    val provenance: String = "demonstration",
+    val role: String? = null
+) {
+    fun isPlatformSlot(): Boolean =
+        type == SlotType.PLATFORM ||
+        role in setOf("target_platform", "shopping_platform", "messaging_platform", "communication_platform", "platform") ||
+        name in setOf("platform", "shopping_platform", "messaging_platform", "communication_platform", "target_platform", "app_platform")
+}

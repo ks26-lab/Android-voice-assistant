@@ -85,10 +85,65 @@ object DemonstrationFilter {
         return isGenericRole && !hasEvidence
     }
 
-    fun filter(trace: DemonstrationTrace): FilteredDemonstrationResult {
+    fun isSettingsSurface(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val pkg = packageName.lowercase()
+        return pkg == "com.android.settings" || pkg.startsWith("com.android.settings.") ||
+            pkg.contains(".settings") || pkg.endsWith(".settings")
+    }
+
+    fun isBackAction(action: ActionEvent): Boolean {
+        if (action.actionType.equals("BACK", ignoreCase = true)) return true
+        val text = action.semanticSelector.text?.lowercase() ?: ""
+        val desc = action.semanticSelector.contentDescription?.lowercase() ?: ""
+        val res = action.semanticSelector.resourceId?.lowercase() ?: ""
+        return desc.contains("navigate up") || desc.contains("back") || text == "back" ||
+            res.contains("back") || res.contains("up_button") || res.contains("home_as_up")
+    }
+
+    fun extractIntentTokens(
+        skillName: String?,
+        skillDescription: String?,
+        voiceEvents: List<com.chockXlate.teachablevoice.contract.event.VoiceEvent> = emptyList()
+    ): Set<String> {
+        val combined = buildString {
+            if (!skillName.isNullOrBlank()) append(skillName).append(" ")
+            if (!skillDescription.isNullOrBlank()) append(skillDescription).append(" ")
+            voiceEvents.forEach { append(it.transcript).append(" ") }
+        }.lowercase()
+
+        val stopWords = setOf(
+            "a", "an", "the", "and", "or", "to", "for", "in", "on", "at", "by", "of", "from", "with",
+            "search", "find", "order", "buy", "open", "launch", "navigate", "go", "click", "tap",
+            "using", "use", "app", "application", "task", "skill", "query", "any", "please", "can",
+            "you", "me", "show", "get", "do", "run", "start", "stop", "test", "my", "item", "something"
+        )
+
+        return combined.split(Regex("[^a-zA-Z0-9_]+"))
+            .map { it.trim() }
+            .filter { it.length >= 3 && it !in stopWords }
+            .toSet()
+    }
+
+    fun packageMatchesIntent(packageName: String, intentTokens: Set<String>): Boolean {
+        if (intentTokens.isEmpty()) return false
+        val pkgLower = packageName.lowercase()
+        val segments = pkgLower.split('.', '_', '-')
+        return intentTokens.any { token ->
+            segments.any { seg -> seg == token || seg.contains(token) } || pkgLower.contains(token)
+        }
+    }
+
+    fun filter(
+        trace: DemonstrationTrace,
+        skillName: String? = null,
+        skillDescription: String? = null
+    ): FilteredDemonstrationResult {
         val allFiltered = mutableListOf<FilteredTraceEvent>()
 
-        // 1. Resolve primary target application package(s)
+        val intentTokens = extractIntentTokens(skillName, skillDescription, trace.voiceEvents)
+
+        // 1. Resolve candidate application package(s)
         val candidatePackages = mutableListOf<String>()
         if (trace.appContext.isNotBlank() && trace.appContext != "unknown" && !isSystemSurface(trace.appContext) && !isOwnApp(trace.appContext)) {
             candidatePackages.add(trace.appContext)
@@ -127,10 +182,73 @@ object DemonstrationFilter {
             }
         }
 
-        val primaryTargetPackage = candidatePackages.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-            ?: trace.appContext.takeIf { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
-            ?: actions.mapNotNull { it.packageName }.firstOrNull { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
-            ?: "unknown"
+        // Identify Intent-Target Packages (supports multi-app workflows natively)
+        val intentTargetPackages = candidatePackages.filter { packageMatchesIntent(it, intentTokens) && !isSettingsSurface(it) }.toSet()
+
+        val primaryTargetPackage = when {
+            intentTargetPackages.isNotEmpty() -> {
+                candidatePackages.filter { it in intentTargetPackages }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+                    ?: intentTargetPackages.first()
+            }
+            else -> {
+                candidatePackages.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+                    ?: trace.appContext.takeIf { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
+                    ?: actions.mapNotNull { it.packageName }.firstOrNull { !isSystemSurface(it) && !isOwnApp(it) && it.isNotBlank() && it != "unknown" }
+                    ?: "unknown"
+            }
+        }
+
+        // Pre-pass: Detect Mistake Sequences (Backtracking, Accidental App Detours, Superseded Inputs)
+        val sortedActions = actions.sortedBy { it.timestamp }
+        val undoneActionIds = mutableSetOf<String>()
+        val recoveryActionIds = mutableSetOf<String>()
+        val supersededActionIds = mutableSetOf<String>()
+        val detourActionIds = mutableSetOf<String>()
+
+        val allowsSettings = intentTokens.contains("settings")
+
+        for (i in sortedActions.indices) {
+            val current = sortedActions[i]
+            val curPkg = current.packageName ?: ""
+
+            // Accidental Settings Detection
+            if (isSettingsSurface(curPkg) && !allowsSettings) {
+                detourActionIds.add(current.actionId)
+            }
+
+            // Accidental Foreign App Detour Detection
+            if (intentTargetPackages.isNotEmpty() && curPkg.isNotBlank() && curPkg !in intentTargetPackages && !isSystemSurface(curPkg)) {
+                detourActionIds.add(current.actionId)
+            }
+
+            // Backtracking & Correction Detection
+            if (isBackAction(current)) {
+                recoveryActionIds.add(current.actionId)
+                if (i > 0) {
+                    val prev = sortedActions[i - 1]
+                    // If previous action was in a detour or was an accidental click in same app, mark as undone
+                    undoneActionIds.add(prev.actionId)
+                }
+            }
+
+            // Text input correction detection (e.g. typing "cars", then replacing with "headphones")
+            if (current.actionType == "INPUT_TEXT" || !current.inputData.isNullOrBlank()) {
+                val currentText = current.inputData ?: current.semanticSelector.text ?: ""
+                for (j in i + 1 until sortedActions.size) {
+                    val next = sortedActions[j]
+                    if (next.actionType == "INPUT_TEXT" || !next.inputData.isNullOrBlank()) {
+                        val nextText = next.inputData ?: next.semanticSelector.text ?: ""
+                        if (currentText.isNotBlank() && nextText.isNotBlank() && currentText != nextText) {
+                            val nextMatchesIntent = intentTokens.any { nextText.lowercase().contains(it) }
+                            val currentMatchesIntent = intentTokens.any { currentText.lowercase().contains(it) }
+                            if (nextMatchesIntent && !currentMatchesIntent) {
+                                supersededActionIds.add(current.actionId)
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Find the timestamp when the target application was first engaged
         val firstTargetEngagementTimestamp = actions.firstOrNull { action ->
@@ -157,7 +275,6 @@ object DemonstrationFilter {
 
         // 2. Classify each event
         val eventsToProcess = trace.traceEvents.ifEmpty {
-            // Reconstruct pseudo-trace events if traceEvents was empty
             val list = mutableListOf<TraceEvent>()
             trace.voiceEvents.forEach { list.add(TraceEvent.Voice(it.eventId, it.timestamp, it)) }
             trace.userActions.forEach { list.add(TraceEvent.Action(it.actionId, it.timestamp, it)) }
@@ -169,6 +286,12 @@ object DemonstrationFilter {
             val filteredEvent = classifyEvent(
                 event = event,
                 primaryPackage = primaryTargetPackage,
+                intentTargetPackages = intentTargetPackages,
+                undoneActionIds = undoneActionIds,
+                recoveryActionIds = recoveryActionIds,
+                supersededActionIds = supersededActionIds,
+                detourActionIds = detourActionIds,
+                allowsSettings = allowsSettings,
                 firstTargetEngagementTimestamp = firstTargetEngagementTimestamp,
                 packageContinuity = packageCounts,
                 trace = trace
@@ -196,6 +319,12 @@ object DemonstrationFilter {
     private fun classifyEvent(
         event: TraceEvent,
         primaryPackage: String,
+        intentTargetPackages: Set<String> = emptySet(),
+        undoneActionIds: Set<String> = emptySet(),
+        recoveryActionIds: Set<String> = emptySet(),
+        supersededActionIds: Set<String> = emptySet(),
+        detourActionIds: Set<String> = emptySet(),
+        allowsSettings: Boolean = false,
         firstTargetEngagementTimestamp: Long,
         packageContinuity: Map<String, Int>,
         trace: DemonstrationTrace
@@ -213,6 +342,12 @@ object DemonstrationFilter {
                 classifyAction(
                     action = event.actionEvent,
                     primaryPackage = primaryPackage,
+                    intentTargetPackages = intentTargetPackages,
+                    undoneActionIds = undoneActionIds,
+                    recoveryActionIds = recoveryActionIds,
+                    supersededActionIds = supersededActionIds,
+                    detourActionIds = detourActionIds,
+                    allowsSettings = allowsSettings,
                     firstTargetEngagementTimestamp = firstTargetEngagementTimestamp,
                     packageContinuity = packageContinuity,
                     trace = trace
@@ -230,6 +365,12 @@ object DemonstrationFilter {
     private fun classifyAction(
         action: ActionEvent,
         primaryPackage: String,
+        intentTargetPackages: Set<String> = emptySet(),
+        undoneActionIds: Set<String> = emptySet(),
+        recoveryActionIds: Set<String> = emptySet(),
+        supersededActionIds: Set<String> = emptySet(),
+        detourActionIds: Set<String> = emptySet(),
+        allowsSettings: Boolean = false,
         firstTargetEngagementTimestamp: Long,
         packageContinuity: Map<String, Int>,
         trace: DemonstrationTrace
@@ -275,6 +416,76 @@ object DemonstrationFilter {
                 reason = "Interaction belongs to assistant's own application package.",
                 packageName = originPkg,
                 isSystemSurface = true,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule -3: Undone accidental action (reverted by subsequent Back)
+        if (action.actionId in undoneActionIds) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.SYSTEM_NOISE,
+                reason = "Undone accidental target interaction (reverted by user back navigation).",
+                packageName = originPkg,
+                isSystemSurface = isSystem,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule -2: Mistake recovery action (Back button returning to task context)
+        if (action.actionId in recoveryActionIds) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.NAVIGATION_CONTEXT,
+                reason = "Mistake recovery navigation returning to primary task context.",
+                packageName = originPkg,
+                isSystemSurface = isSystem,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule -1: Superseded input value (replaced by corrected value)
+        if (action.actionId in supersededActionIds) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.SYSTEM_NOISE,
+                reason = "Superseded input value replaced by user correction.",
+                packageName = originPkg,
+                isSystemSurface = isSystem,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule 0.5: Settings surface interaction outside declared task intent
+        if (isSettingsSurface(originPkg) && !allowsSettings) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.SYSTEM_NOISE,
+                reason = "Settings surface interaction is not part of declared task intent.",
+                packageName = originPkg,
+                isSystemSurface = true,
+                isActionable = false
+            )
+            safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
+            return res
+        }
+
+        // Rule 0.8: Accidental foreign app detour outside declared intent targets
+        if (action.actionId in detourActionIds || (intentTargetPackages.isNotEmpty() && originPkg !in intentTargetPackages && !isSystem)) {
+            val res = FilteredTraceEvent(
+                eventId = action.actionId,
+                classification = DemonstrationFilterClassification.SYSTEM_NOISE,
+                reason = "Incidental action in unrelated package '$originPkg' outside declared task context.",
+                packageName = originPkg,
+                isSystemSurface = false,
                 isActionable = false
             )
             safeLogFilter(action.actionType, originPkg, res.classification.name, res.isActionable, res.reason)
@@ -374,8 +585,9 @@ object DemonstrationFilter {
 
         // Rule 5: Legitimate cross-package transition vs unrelated foreign package
         if (originPkg != primaryPackage && !isSystem) {
+            val isIntentTarget = originPkg in intentTargetPackages
             val count = packageContinuity[originPkg] ?: 0
-            if (count >= 1 || (action.packageName == originPkg && !isSystemSurface(originPkg))) {
+            if (isIntentTarget || count >= 1 || (action.packageName == originPkg && !isSystemSurface(originPkg))) {
                 val res = FilteredTraceEvent(
                     eventId = action.actionId,
                     classification = DemonstrationFilterClassification.TASK_RELEVANT,

@@ -634,4 +634,289 @@ class SkillMatcherTest {
 
         assertEquals("1.0", result.schemaVersion)
     }
+
+    // =========================================================================
+    // PHASE 4.2 TEST MATRIX
+    // =========================================================================
+
+    // PH4.2-T1 — Exact semantic match
+    @Test
+    fun testPH4_2_T1_ExactSemanticMatch() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order a white shirt from Amazon")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop_amazon", result.selectedSkillId)
+        assertNotNull(result.selectedWorkflow)
+    }
+
+    // PH4.2-T2 — Paraphrase
+    @Test
+    fun testPH4_2_T2_Paraphrase() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "\${item}", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Can you get me a white shirt through Amazon?")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop_amazon", result.selectedSkillId)
+    }
+
+    // PH4.2-T3 — Changed item (Variable slot)
+    @Test
+    fun testPH4_2_T3_ChangedItem() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Get me a blue jacket from Amazon")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop_amazon", result.selectedSkillId)
+        // Command retains "Blue Jacket"
+        assertEquals("Blue Jacket", cmd.item)
+    }
+
+    // PH4.2-T4 — Changed platform (Platform substitution)
+    @Test
+    fun testPH4_2_T4_ChangedPlatform() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable", role = "target_platform")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Get me a blue jacket from Myntra")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop_amazon", result.selectedSkillId)
+        assertEquals("Myntra", cmd.platform)
+    }
+
+    // PH4.2-T5 — Changed quantity
+    @Test
+    fun testPH4_2_T5_ChangedQuantity() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable"),
+                WorkflowSlot(name = "quantity", type = SlotType.INTEGER, required = false, exampleValue = "1", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Get me 3 blue jackets from Myntra")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("3", cmd.quantity)
+    }
+
+    // PH4.2-T6 — Wrong intent
+    @Test
+    fun testPH4_2_T6_WrongIntent() {
+        val wf = createWorkflow(skillId = "skill_shop", intent = "shop_item")
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order dinner from Swiggy")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.UNKNOWN, result.status)
+        assertNull(result.selectedSkillId)
+    }
+
+    // PH4.2-T7 — Second workflow selection
+    @Test
+    fun testPH4_2_T7_SecondWorkflowSelection() {
+        val wfShop = createWorkflow(skillId = "skill_shop", intent = "shop_item")
+        val wfFood = createWorkflow(skillId = "skill_food", intent = "order_food")
+        repository.saveWorkflow(wfShop)
+        repository.saveWorkflow(wfFood)
+
+        val cmd = CommandInterpreter.understandCommand("Order dinner from Swiggy")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_food", result.selectedSkillId)
+    }
+
+    // PH4.2-T8 — Unknown workflow
+    @Test
+    fun testPH4_2_T8_UnknownWorkflow() {
+        val wfShop = createWorkflow(skillId = "skill_shop", intent = "shop_item")
+        repository.saveWorkflow(wfShop)
+
+        val cmd = CommandInterpreter.understandCommand("Book a hotel")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.UNKNOWN, result.status)
+        assertNull(result.selectedSkillId)
+    }
+
+    // PH4.2-T9 — Ambiguous candidates
+    @Test
+    fun testPH4_2_T9_AmbiguousCandidates() {
+        val wf1 = createWorkflow(skillId = "skill_search_1", intent = "search_information")
+        val wf2 = createWorkflow(skillId = "skill_search_2", intent = "search_information")
+        repository.saveWorkflow(wf1)
+        repository.saveWorkflow(wf2)
+
+        val cmd = CommandInterpreter.understandCommand("Search for wireless headphones")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.AMBIGUOUS, result.status)
+        assertNull(result.selectedSkillId)
+    }
+
+    // PH4.2-T10 — Phase 4.1 clarification state preserved
+    @Test
+    fun testPH4_2_T10_Phase41ClarificationStatePreserved() {
+        val wf = createWorkflow(skillId = "skill_shop", intent = "shop_item")
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order it")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.NEEDS_CLARIFICATION, result.status)
+        assertNull(result.selectedSkillId)
+    }
+
+    // PH4.2-T11 — Multi-app roles
+    @Test
+    fun testPH4_2_T11_MultiAppRoles() {
+        val wf = createWorkflow(
+            skillId = "skill_multi_app",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "shopping_platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", role = "shopping_platform"),
+                WorkflowSlot(name = "messaging_platform", type = SlotType.PLATFORM, required = true, exampleValue = "WhatsApp", role = "messaging_platform"),
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "shirt", role = "target_item")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Find a white shirt on Myntra and send the link to me on Telegram")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_multi_app", result.selectedSkillId)
+    }
+
+    // PH4.2-T12 — Constant constraint violation
+    @Test
+    fun testPH4_2_T12_ConstantConstraintViolation() {
+        val wf = createWorkflow(
+            skillId = "skill_amazon_only",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "constant")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order a white shirt from Myntra")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.UNKNOWN, result.status)
+        assertNull(result.selectedSkillId)
+    }
+
+    // PH4.2-T13 — Variable platform substitution
+    @Test
+    fun testPH4_2_T13_VariablePlatformSubstitution() {
+        val wf = createWorkflow(
+            skillId = "skill_shop_portable",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Order a white shirt from Myntra")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop_portable", result.selectedSkillId)
+    }
+
+    // PH4.2-T14 — Demonstration value preservation
+    @Test
+    fun testPH4_2_T14_DemonstrationValuePreservation() {
+        val wf = createWorkflow(
+            skillId = "skill_shop",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Can you get me a blue jacket from Myntra?")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_shop", result.selectedSkillId)
+        // Command parameters remain unmutated
+        assertEquals("Blue Jacket", cmd.item)
+        assertEquals("Myntra", cmd.platform)
+    }
+
+    // KILL TEST — Learned Amazon shopping workflow matched for Myntra blue jacket
+    @Test
+    fun testKillTest_AmazonLearned_MyntraCommandMatched() {
+        val wf = createWorkflow(
+            skillId = "skill_learned_amazon",
+            intent = "shop_item",
+            slots = listOf(
+                WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, exampleValue = "white shirt", provenance = "variable"),
+                WorkflowSlot(name = "platform", type = SlotType.PLATFORM, required = true, exampleValue = "Amazon", provenance = "variable"),
+                WorkflowSlot(name = "quantity", type = SlotType.INTEGER, required = false, exampleValue = "1", provenance = "variable")
+            )
+        )
+        repository.saveWorkflow(wf)
+
+        val cmd = CommandInterpreter.understandCommand("Can you get me a blue jacket from Myntra?")
+        val result = matcher.match(cmd)
+
+        assertEquals(SkillMatchStatus.MATCHED, result.status)
+        assertEquals("skill_learned_amazon", result.selectedSkillId)
+        assertNotNull(result.selectedWorkflow)
+        assertEquals("Blue Jacket", cmd.item)
+        assertEquals("Myntra", cmd.platform)
+    }
 }
+

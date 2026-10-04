@@ -70,10 +70,11 @@ class AccessibilityUiDriver(
                 RuntimeAction.CLICK -> AccessibilityNodeInfo.ACTION_CLICK
                 RuntimeAction.INPUT_TEXT -> AccessibilityNodeInfo.ACTION_SET_TEXT
                 RuntimeAction.LONG_PRESS -> AccessibilityNodeInfo.ACTION_LONG_CLICK
+                RuntimeAction.BACK -> AccessibilityNodeInfo.ACTION_CLICK
                 RuntimeAction.SCROLL -> when (step.scrollDirection) {
                     "forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                     "backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-                    else -> return@onMain ActionOutcome(false, reason = "Unsupported scroll direction.", before = ui)
+                    else -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                 }
             }
             if (!node.isEnabled || !node.isVisibleToUser || node.actionList.none { it.id == actionId }) {

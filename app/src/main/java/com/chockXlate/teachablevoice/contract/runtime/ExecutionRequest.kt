@@ -9,5 +9,8 @@ data class ExecutionRequest(
     val skillId: String,
     val boundSlots: Map<String, String> = emptyMap(),
     val version: Int = 1,
-    val provenance: String = "person_1_matching"
+    val provenance: String = "person_1_matching",
+    val isSensitive: Boolean = false,
+    val originalCommand: String? = null
 )
+

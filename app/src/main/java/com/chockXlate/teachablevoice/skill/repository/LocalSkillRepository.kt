@@ -1,11 +1,14 @@
 package com.chockXlate.teachablevoice.skill.repository
 
+import com.chockXlate.teachablevoice.contract.skill.SkillRecord
+import com.chockXlate.teachablevoice.contract.skill.SkillStatus
 import com.chockXlate.teachablevoice.contract.workflow.Workflow
 import com.chockXlate.teachablevoice.skill.validation.ReplayAdmission
 import com.chockXlate.teachablevoice.skill.validation.ValidationStatus
 import com.chockXlate.teachablevoice.skill.validation.WorkflowValidator
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -19,6 +22,7 @@ class LocalSkillRepository(
 
     private val store = ConcurrentHashMap<String, Workflow>()
     private val versionStore = ConcurrentHashMap<String, Int>()
+    private val skillRecordStore = ConcurrentHashMap<String, SkillRecord>()
 
     private val jsonFormatter = Json {
         ignoreUnknownKeys = true
@@ -31,7 +35,7 @@ class LocalSkillRepository(
     }
 
     /**
-     * Loads all valid persisted workflows from [storageDir] into the memory cache.
+     * Loads all valid persisted skills and workflows from [storageDir] into memory caches.
      */
     @Synchronized
     fun loadPersistedWorkflows() {
@@ -41,15 +45,31 @@ class LocalSkillRepository(
                 storageDir.mkdirs()
                 return
             }
-            val files = storageDir.listFiles { _, name -> name.endsWith(".json") } ?: return
+            val files = storageDir.listFiles() ?: return
             for (file in files) {
                 try {
-                    val jsonContent = file.readText()
-                    val workflow = jsonFormatter.decodeFromString(Workflow.serializer(), jsonContent)
-                    val validation = WorkflowValidator.validate(workflow)
-                    if (validation.status == ValidationStatus.VALID && validation.isStoreable) {
-                        store[workflow.skillId] = workflow
-                        versionStore[workflow.skillId] = versionStore.getOrDefault(workflow.skillId, 1)
+                    val fileName = file.name
+                    if (fileName.endsWith(".skill.json")) {
+                        val jsonContent = file.readText()
+                        val record = jsonFormatter.decodeFromString(SkillRecord.serializer(), jsonContent)
+                        skillRecordStore[record.id] = record
+                    } else if (fileName.endsWith(".json")) {
+                        val jsonContent = file.readText()
+                        val workflow = jsonFormatter.decodeFromString(Workflow.serializer(), jsonContent)
+                        val validation = WorkflowValidator.validate(workflow)
+                        if (validation.status == ValidationStatus.VALID && validation.isStoreable) {
+                            store[workflow.skillId] = workflow
+                            versionStore[workflow.skillId] = versionStore.getOrDefault(workflow.skillId, 1)
+                            if (!skillRecordStore.containsKey(workflow.skillId)) {
+                                skillRecordStore[workflow.skillId] = SkillRecord(
+                                    id = workflow.skillId,
+                                    name = workflow.name.ifBlank { workflow.intent },
+                                    description = workflow.intent,
+                                    status = SkillStatus.TRAINED,
+                                    workflowId = workflow.skillId
+                                )
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     // Ignore corrupted file during startup without crashing
@@ -59,6 +79,69 @@ class LocalSkillRepository(
             // Storage directory access failure handled gracefully
         }
     }
+
+    // ==========================================
+    // Dynamic Skill Entity Management (Phase 2)
+    // ==========================================
+
+    override fun createSkill(name: String, description: String, id: String): SkillRecord {
+        require(name.isNotBlank()) { "Skill name cannot be blank." }
+        val skillId = id.ifBlank { generateUniqueSkillId(name) }
+        val record = SkillRecord(
+            id = skillId,
+            name = name.trim(),
+            description = description.trim(),
+            status = SkillStatus.TEACHING,
+            workflowId = null,
+            createdAt = System.currentTimeMillis()
+        )
+        skillRecordStore[skillId] = record
+        persistSkillRecordToDisk(record)
+        return record
+    }
+
+    override fun getSkill(id: String): SkillRecord? {
+        val cached = skillRecordStore[id]
+        if (cached != null) return cached
+        val wf = store[id]
+        if (wf != null) {
+            val record = SkillRecord(
+                id = wf.skillId,
+                name = wf.name.ifBlank { wf.intent },
+                description = wf.intent,
+                status = SkillStatus.TRAINED,
+                workflowId = wf.skillId
+            )
+            skillRecordStore[id] = record
+            return record
+        }
+        return null
+    }
+
+    override fun listSkills(): List<SkillRecord> {
+        return skillRecordStore.values.sortedBy { it.createdAt }
+    }
+
+    override fun updateSkill(skill: SkillRecord): Boolean {
+        skillRecordStore[skill.id] = skill
+        persistSkillRecordToDisk(skill)
+        return true
+    }
+
+    private fun persistSkillRecordToDisk(record: SkillRecord) {
+        if (storageDir == null) return
+        try {
+            if (!storageDir.exists()) {
+                storageDir.mkdirs()
+            }
+            val file = File(storageDir, "${sanitizeFileName(record.id)}.skill.json")
+            val jsonContent = jsonFormatter.encodeToString(SkillRecord.serializer(), record)
+            file.writeText(jsonContent)
+        } catch (e: Exception) {
+            // Handle disk write gracefully
+        }
+    }
+
 
     /** Production admission. saveWorkflow retains structural draft/import compatibility. */
     fun saveReplayableWorkflow(workflow: Workflow): Boolean {
@@ -70,6 +153,12 @@ class LocalSkillRepository(
         // Step 1: Validate Workflow prior to storage
         val validation = WorkflowValidator.validate(workflow)
         if (validation.status != ValidationStatus.VALID || !validation.isStoreable) {
+            com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+                id = "store_${workflow.skillId.ifBlank { "pending" }}",
+                label = "Persist Workflow",
+                status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.FAILED,
+                metadata = "Rejected: Validation ${validation.status}"
+            )
             return false // Reject storage for INVALID or BLOCKED workflows
         }
 
@@ -90,6 +179,13 @@ class LocalSkillRepository(
 
         // Persist to disk if storage directory is configured
         persistWorkflowToDisk(canonicalWorkflow)
+
+        com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+            id = "store_${canonicalWorkflow.skillId}",
+            label = "Persist Workflow",
+            status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.COMPLETED,
+            metadata = "${canonicalWorkflow.name.ifBlank { canonicalWorkflow.skillId }} (v$newVersion)"
+        )
 
         return true
     }
@@ -117,23 +213,37 @@ class LocalSkillRepository(
     }
 
     override fun deleteWorkflow(skillId: String): Boolean {
-        val removed = store.remove(skillId) != null
+        val removedWf = store.remove(skillId) != null
+        val removedRecord = skillRecordStore.remove(skillId) != null
         versionStore.remove(skillId)
         if (storageDir != null) {
             try {
-                val file = File(storageDir, "${sanitizeFileName(skillId)}.json")
-                if (file.exists()) {
-                    file.delete()
+                val wfFile = File(storageDir, "${sanitizeFileName(skillId)}.json")
+                if (wfFile.exists()) {
+                    wfFile.delete()
+                }
+                val skillFile = File(storageDir, "${sanitizeFileName(skillId)}.skill.json")
+                if (skillFile.exists()) {
+                    skillFile.delete()
                 }
             } catch (e: Exception) {
                 // Ignore delete error
             }
         }
+        val removed = removedWf || removedRecord
+        if (removed) {
+            com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+                id = "delete_${skillId}",
+                label = "Delete Skill",
+                status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.COMPLETED,
+                metadata = "Deleted skill ID: $skillId"
+            )
+        }
         return removed
     }
 
     override fun contains(skillId: String): Boolean {
-        return store.containsKey(skillId)
+        return store.containsKey(skillId) || skillRecordStore.containsKey(skillId)
     }
 
     override fun getSkillVersion(skillId: String): Int {
@@ -142,10 +252,11 @@ class LocalSkillRepository(
 
     fun clear() {
         store.clear()
+        skillRecordStore.clear()
         versionStore.clear()
         if (storageDir != null) {
             try {
-                storageDir.listFiles { _, name -> name.endsWith(".json") }?.forEach { it.delete() }
+                storageDir.listFiles { _, name -> name.endsWith(".json") || name.endsWith(".skill.json") }?.forEach { it.delete() }
             } catch (e: Exception) {
                 // Ignore clear error
             }
@@ -156,7 +267,18 @@ class LocalSkillRepository(
         return store.size
     }
 
+    fun getSkillCount(): Int {
+        return skillRecordStore.size
+    }
+
     companion object {
+        fun generateUniqueSkillId(name: String): String {
+            val sanitized = name.lowercase().trim().replace(Regex("[^a-z0-9]"), "_").take(16).trim('_')
+            val prefix = if (sanitized.isNotBlank()) sanitized else "custom"
+            val uniqueSuffix = UUID.randomUUID().toString().replace("-", "").take(8)
+            return "skill_${prefix}_${uniqueSuffix}"
+        }
+
         fun generateDeterministicSkillId(workflow: Workflow): String {
             val intent = workflow.intent.lowercase().trim()
             val stepCount = workflow.steps.size
@@ -171,4 +293,5 @@ class LocalSkillRepository(
         }
     }
 }
+
 

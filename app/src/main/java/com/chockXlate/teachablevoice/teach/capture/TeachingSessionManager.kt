@@ -15,9 +15,14 @@ object TeachingSessionManager {
 
     private val currentSession = AtomicReference<TeachingSessionImpl?>(null)
 
-    fun startSession(skillName: String, intent: String): TeachingSession {
-        val newSession = TeachingSessionImpl(skillName, intent)
-        newSession.startTeaching(skillName, intent)
+    fun startSession(skillName: String, intent: String = "", skillId: String = "", description: String = ""): TeachingSession {
+        val newSession = TeachingSessionImpl(
+            initialSkillName = skillName,
+            initialIntent = intent,
+            initialSkillId = skillId,
+            initialDescription = description
+        )
+        newSession.startTeaching(skillName = skillName, intent = intent, skillId = skillId, description = description)
         currentSession.set(newSession)
         return newSession
     }
@@ -26,10 +31,16 @@ object TeachingSessionManager {
         return currentSession.get()?.isRecording == true
     }
 
+    fun getActiveSkillId(): String? {
+        val session = currentSession.get()
+        return if (session?.isRecording == true) session.skillId else null
+    }
+
     fun getActiveSession(): TeachingSession? {
         val session = currentSession.get()
         return if (session?.isRecording == true) session else null
     }
+
 
     fun recordVoiceEvent(event: VoiceEvent) {
         getActiveSession()?.recordVoiceEvent(event)

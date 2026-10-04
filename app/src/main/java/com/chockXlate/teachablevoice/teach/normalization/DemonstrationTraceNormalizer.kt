@@ -16,7 +16,11 @@ import kotlin.math.abs
  */
 object DemonstrationTraceNormalizer {
 
-    fun normalize(rawTrace: DemonstrationTrace): TraceNormalizationResult {
+    fun normalize(
+        rawTrace: DemonstrationTrace,
+        skillName: String? = null,
+        skillDescription: String? = null
+    ): TraceNormalizationResult {
         val warnings = mutableListOf<String>()
         val rawEventCount = rawTrace.traceEvents.size
 
@@ -59,11 +63,16 @@ object DemonstrationTraceNormalizer {
             }
         }
 
-        // 3. App & Window Context Resolution
+        // 3. App & Window Context Resolution (Intent-grounded)
+        val intentTokens = DemonstrationFilter.extractIntentTokens(skillName, skillDescription)
         var resolvedAppContext = rawTrace.appContext
+        val isCurrentAppDetour = intentTokens.isNotEmpty() && !DemonstrationFilter.packageMatchesIntent(resolvedAppContext, intentTokens)
+
         if (resolvedAppContext.isBlank() || resolvedAppContext == "unknown" ||
             DemonstrationFilter.isSystemSurface(resolvedAppContext) ||
-            DemonstrationFilter.isOwnApp(resolvedAppContext)
+            DemonstrationFilter.isOwnApp(resolvedAppContext) ||
+            DemonstrationFilter.isSettingsSurface(resolvedAppContext) ||
+            isCurrentAppDetour
         ) {
             val discoveredApp = normalizedEvents.asSequence()
                 .mapNotNull { ev ->
@@ -74,7 +83,18 @@ object DemonstrationTraceNormalizer {
                         else -> null
                     }
                 }
-                .firstOrNull { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
+                .filter { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) && !DemonstrationFilter.isSettingsSurface(it) }
+                .firstOrNull { intentTokens.isEmpty() || DemonstrationFilter.packageMatchesIntent(it, intentTokens) }
+                ?: normalizedEvents.asSequence()
+                    .mapNotNull { ev ->
+                        when (ev) {
+                            is TraceEvent.Action -> ev.actionEvent.packageName
+                            is TraceEvent.Ui -> ev.uiEvent.packageName
+                            is TraceEvent.State -> ev.stateEvent.beforeState.appContext
+                            else -> null
+                        }
+                    }
+                    .firstOrNull { it.isNotBlank() && it != "unknown" && !DemonstrationFilter.isSystemSurface(it) && !DemonstrationFilter.isOwnApp(it) }
 
             if (discoveredApp != null) {
                 resolvedAppContext = discoveredApp

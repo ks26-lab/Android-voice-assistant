@@ -12,15 +12,18 @@ import com.chockXlate.teachablevoice.contract.trace.DemonstrationTrace
 interface TeachingSession {
     val isRecording: Boolean
     val sessionId: String
+    val skillId: String
     val skillName: String
     val intent: String
+    val description: String
     val startTimestamp: Long
 
-    fun startTeaching(skillName: String, intent: String)
+    fun startTeaching(skillName: String, intent: String, skillId: String = "", description: String = "")
     fun recordVoiceEvent(event: VoiceEvent)
     fun recordUiEvent(event: UiEvent)
     fun recordActionEvent(action: ActionEvent)
     fun recordStateEvent(event: StateEvent) {}
     fun stopTeaching(): DemonstrationTrace
 }
+
 

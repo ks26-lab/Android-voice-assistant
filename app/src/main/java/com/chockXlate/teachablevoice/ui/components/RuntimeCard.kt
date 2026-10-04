@@ -37,6 +37,8 @@ fun RuntimeCard(
     currentStep: Int,
     steps: List<RuntimeStepData>,
     onAction: (String, Any?) -> Unit,
+    workflowName: String = "Learned Workflow",
+    clarificationOptions: List<String> = emptyList(),
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -113,7 +115,7 @@ fun RuntimeCard(
                             ) {
                                 Text(
                                     text = sc.label,
-                                    color = if (isSelected) Color.White else ColorTextMuted,
+                                    color = if (isSelected) ColorTextPrimary else ColorTextMuted,
                                     fontSize = 10.sp,
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                                     textAlign = TextAlign.Center
@@ -123,7 +125,7 @@ fun RuntimeCard(
                     }
 
                     Text(
-                        text = "Order Food",
+                        text = workflowName,
                         color = ColorTextSecondary,
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.SemiBold
@@ -162,7 +164,7 @@ fun RuntimeCard(
 
                 RuntimeState.STARTING -> {
                     Text(
-                        text = "Order Food",
+                        text = workflowName,
                         color = ColorTextPrimary,
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Bold
@@ -182,7 +184,7 @@ fun RuntimeCard(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Order Food",
+                            text = workflowName,
                             color = ColorTextPrimary,
                             fontSize = 14.5.sp,
                             fontWeight = FontWeight.Bold
@@ -211,7 +213,7 @@ fun RuntimeCard(
                                 else -> ColorBorderSubtle
                             }
                             val chipText = when {
-                                isActive -> Color.White
+                                isActive -> ColorTextPrimary
                                 isDone -> ColorStatusReady
                                 else -> ColorTextMuted
                             }
@@ -281,7 +283,7 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "PAUSED", variant = StatusVariant.PAUSED)
                     }
                     Text(
@@ -307,7 +309,7 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "USER HANDOFF", variant = StatusVariant.HANDOFF)
                     }
 
@@ -327,7 +329,7 @@ fun RuntimeCard(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Automation stopped at Payment. Sensitive action requires user confirmation.",
+                            text = "Automation stopped at Protected Boundary. Sensitive action requires user confirmation.",
                             color = ColorTextSecondary,
                             fontSize = 11.5.sp
                         )
@@ -351,43 +353,34 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "WAITING", variant = StatusVariant.WAITING)
                     }
 
                     Text(
-                        text = "Target could not be resolved. Please clarify which restaurant target you intended:",
+                        text = "Target could not be resolved. Please clarify which target you intended:",
                         color = ColorTextSecondary,
                         fontSize = 11.5.sp
                     )
 
+                    val options = if (clarificationOptions.isNotEmpty()) clarificationOptions else listOf("Option A", "Option B")
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RadiusXs)
-                                .background(ColorBgSurfaceElevated)
-                                .border(1.dp, ColorBorderMedium, RadiusXs)
-                                .clickable { onAction("PROVIDE_CLARIFICATION", "Pizza Palace") }
-                                .padding(8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(text = "Pizza Palace", color = ColorTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RadiusXs)
-                                .background(ColorBgSurfaceElevated)
-                                .border(1.dp, ColorBorderMedium, RadiusXs)
-                                .clickable { onAction("PROVIDE_CLARIFICATION", "Domino's") }
-                                .padding(8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(text = "Domino's", color = ColorTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        options.forEach { opt ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RadiusXs)
+                                    .background(ColorBgSurfaceElevated)
+                                    .border(1.dp, ColorBorderMedium, RadiusXs)
+                                    .clickable { onAction("PROVIDE_CLARIFICATION", opt) }
+                                    .padding(8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(text = opt, color = ColorTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            }
                         }
                     }
                 }
@@ -398,7 +391,7 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "RECOVERING", variant = StatusVariant.RECOVERING)
                     }
                     Text(
@@ -414,7 +407,7 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "UNRESOLVED", variant = StatusVariant.UNRESOLVED)
                     }
 
@@ -458,7 +451,7 @@ fun RuntimeCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(text = "Order Food", color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                        Text(text = workflowName, color = ColorTextPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
                         StatusIndicator(status = "COMPLETED", variant = StatusVariant.COMPLETED)
                     }
 
@@ -480,9 +473,9 @@ fun RuntimeCard(
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(text = "5 steps executed", color = ColorTextSecondary, fontSize = 11.sp)
+                            Text(text = "${steps.size} steps executed", color = ColorTextSecondary, fontSize = 11.sp)
                             Text(text = "0 failures", color = ColorTextSecondary, fontSize = 11.sp)
-                            Text(text = "12.4 s duration", color = ColorTextSecondary, fontSize = 11.sp)
+                            Text(text = "3.2 s duration", color = ColorTextSecondary, fontSize = 11.sp)
                         }
                     }
 

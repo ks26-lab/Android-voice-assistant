@@ -16,7 +16,9 @@ import java.util.UUID
  */
 class TeachingSessionImpl(
     initialSkillName: String = "",
-    initialIntent: String = ""
+    initialIntent: String = "",
+    initialSkillId: String = "",
+    initialDescription: String = ""
 ) : TeachingSession {
 
     override var isRecording: Boolean = false
@@ -25,10 +27,16 @@ class TeachingSessionImpl(
     override var sessionId: String = UUID.randomUUID().toString()
         private set
 
+    override var skillId: String = initialSkillId.ifBlank { "skill_${UUID.randomUUID().toString().replace("-", "").take(8)}" }
+        private set
+
     override var skillName: String = initialSkillName
         private set
 
     override var intent: String = initialIntent
+        private set
+
+    override var description: String = initialDescription
         private set
 
     override var startTimestamp: Long = System.currentTimeMillis()
@@ -43,17 +51,19 @@ class TeachingSessionImpl(
     private val _traceEvents = Collections.synchronizedList(mutableListOf<TraceEvent>())
 
     init {
-        if (initialSkillName.isNotBlank() || initialIntent.isNotBlank()) {
+        if (initialSkillName.isNotBlank() || initialIntent.isNotBlank() || initialSkillId.isNotBlank()) {
             isRecording = true
         }
     }
 
-    override fun startTeaching(skillName: String, intent: String) {
+    override fun startTeaching(skillName: String, intent: String, skillId: String, description: String) {
         synchronized(this) {
             this.sessionId = UUID.randomUUID().toString()
             this.startTimestamp = System.currentTimeMillis()
+            this.skillId = skillId.ifBlank { "skill_${UUID.randomUUID().toString().replace("-", "").take(8)}" }
             this.skillName = skillName
             this.intent = intent
+            this.description = description
             this._voiceEvents.clear()
             this._uiStates.clear()
             this._userActions.clear()
@@ -63,6 +73,7 @@ class TeachingSessionImpl(
             this.isRecording = true
         }
     }
+
 
     private fun isSystemOrOwnPackage(pkg: String): Boolean {
         val lower = pkg.lowercase()
@@ -87,6 +98,12 @@ class TeachingSessionImpl(
         if (!isRecording) return
         _voiceEvents.add(event)
         _traceEvents.add(TraceEvent.Voice(event.eventId, event.timestamp, event))
+        com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+            id = event.eventId,
+            label = "Voice: \"${event.transcript}\"",
+            status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.COMPLETED,
+            metadata = "Confidence: ${event.confidence}"
+        )
     }
 
     override fun recordUiEvent(event: UiEvent) {
@@ -106,12 +123,24 @@ class TeachingSessionImpl(
         updateSessionAppContext(action.packageName)
         _userActions.add(action)
         _traceEvents.add(TraceEvent.Action(action.actionId, action.timestamp, action))
+        com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+            id = action.actionId,
+            label = "Action: ${action.actionType}",
+            status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.COMPLETED,
+            metadata = action.packageName
+        )
     }
 
     override fun recordStateEvent(event: StateEvent) {
         if (!isRecording) return
         _stateEvents.add(event)
         _traceEvents.add(TraceEvent.State(event.stateEventId, event.timestamp, event))
+        com.chockXlate.teachablevoice.ui.components.ActivityEventStream.emit(
+            id = event.stateEventId,
+            label = "State Transition",
+            status = com.chockXlate.teachablevoice.ui.components.ActivityStatus.COMPLETED,
+            metadata = event.afterState.appContext
+        )
     }
 
     fun peekTrace(): DemonstrationTrace {

@@ -27,18 +27,18 @@ class GenericMidFlowScenariosTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_0_open",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(role = "android.widget.Button", text = "Search Icon")
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(role = "android.widget.Button", text = "Search Icon")
                 ),
                 WorkflowStep(
                     stepId = "step_1_input",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_query")
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(role = "android.widget.EditText", textSlot = "item_query")
                 ),
                 WorkflowStep(
                     stepId = "step_2_select",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(role = "android.widget.TextView", text = "Result Item")
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(role = "android.widget.TextView", text = "Result Item")
                 )
             )
         )
@@ -72,7 +72,7 @@ class GenericMidFlowScenariosTest {
                 WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, provenance = "user_input")
             ),
             steps = listOf(
-                WorkflowStep(stepId = "s1", actionType = "INPUT_TEXT", targetSelector = SemanticSelector(textSlot = "item"))
+                WorkflowStep(stepId = "s1", semanticAction = "INPUT_TEXT", semanticSelector = SemanticSelector(textSlot = "item"))
             )
         )
 
@@ -93,7 +93,7 @@ class GenericMidFlowScenariosTest {
                 WorkflowSlot(name = "item", type = SlotType.TEXT, required = true, provenance = "user_input")
             ),
             steps = listOf(
-                WorkflowStep(stepId = "s1", actionType = "INPUT_TEXT", targetSelector = SemanticSelector(textSlot = "item"))
+                WorkflowStep(stepId = "s1", semanticAction = "INPUT_TEXT", semanticSelector = SemanticSelector(textSlot = "item"))
             )
         )
 

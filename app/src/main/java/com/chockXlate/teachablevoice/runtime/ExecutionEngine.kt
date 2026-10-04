@@ -12,10 +12,17 @@ import com.chockXlate.teachablevoice.runtime.recovery.RecoveryController
 import com.chockXlate.teachablevoice.runtime.slots.BoundStep
 import com.chockXlate.teachablevoice.runtime.slots.SlotBinder
 import com.chockXlate.teachablevoice.runtime.trace.ExecutionTraceRecorder
+import com.chockXlate.teachablevoice.runtime.trace.FinalExecutionStatus
+import com.chockXlate.teachablevoice.runtime.trace.RecoveryRecord
 import com.chockXlate.teachablevoice.runtime.trace.RuntimeReport
+import com.chockXlate.teachablevoice.runtime.trace.StepExecutionStatus
+import com.chockXlate.teachablevoice.runtime.ui.ActionOutcome
+import com.chockXlate.teachablevoice.runtime.ui.RuntimeAction
 import com.chockXlate.teachablevoice.runtime.ui.UiDriver
 import com.chockXlate.teachablevoice.runtime.verification.PreconditionEvaluator
 import com.chockXlate.teachablevoice.runtime.verification.TransitionVerifier
+import com.chockXlate.teachablevoice.runtime.verification.VerificationResult
+import com.chockXlate.teachablevoice.runtime.verification.VerificationStatus
 import com.chockXlate.teachablevoice.runtime.workflow.WorkflowResolver
 import com.chockXlate.teachablevoice.safety.SafetyGate
 import com.chockXlate.teachablevoice.skill.repository.SkillRepository
@@ -38,6 +45,9 @@ class ExecutionEngine(
     @Volatile private var cancelled = false
     @Volatile var lastReport: RuntimeReport? = null
         private set
+
+    fun getLatestReport(): RuntimeReport? = lastReport
+    fun getLatestReportOrEmpty(): RuntimeReport = lastReport ?: RuntimeReport.empty()
 
     private class PausedExecutionState(
         val request: ExecutionRequest,
@@ -82,6 +92,7 @@ class ExecutionEngine(
 
     suspend fun execute(request: ExecutionRequest): RuntimeReport {
         val recorder = ExecutionTraceRecorder(request)
+        recorder.setBoundSlots(request.boundSlots)
         val runGate = synchronized(this) {
             if (running) null else {
                 val r = gate.reason()
@@ -167,7 +178,10 @@ class ExecutionEngine(
                 null, ExecutionState.INITIATED, DecisionType.PROCEED,
                 "Using current workflow content. The repository interface cannot verify the requested historical version."
             )
-            runGate.policy.admission(workflow)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
+            runGate.policy.admission(workflow)?.let {
+                recorder.recordSafetyEvent(null, "BLOCKED", it)
+                return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
+            }
 
             // Subtask structure (backward-compatible: if empty, wraps in single generic subtask)
             val subtasks = if (workflow.subtasks.isNotEmpty()) workflow.subtasks else listOf(
@@ -205,9 +219,24 @@ class ExecutionEngine(
                         it.contains("cvv") || it.contains("card") || it.contains("secret")
                 }
                 if (isSens) {
+                    val sensMsg = "Missing sensitive credential parameter '${missing.name}'. Automated entry of credentials is strictly prohibited."
+                    recorder.recordSafetyEvent(null, "BLOCKED", sensMsg)
+                    recorder.recordUncertainty(
+                        com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                            executionId = request.executionId,
+                            stepId = null,
+                            uncertaintyType = UncertaintyType.SAFETY_BOUNDARY.name,
+                            source = "SLOT_VALIDATOR",
+                            decision = sensMsg,
+                            clarificationId = null,
+                            question = null,
+                            candidateCount = 0,
+                            finalDisposition = UncertaintyDisposition.HANDOFF.name
+                        )
+                    )
                     return finish(
                         ExecutionState.PAUSED_FOR_HANDOFF,
-                        "Missing sensitive credential parameter '${missing.name}'. Automated entry of credentials is strictly prohibited."
+                        sensMsg
                     )
                 }
                 val clarReq = ClarificationRequest(
@@ -217,7 +246,8 @@ class ExecutionEngine(
                     question = "Please provide the value for '${missing.name}':",
                     requiredSlot = missing.name,
                     pausedSubtaskId = subtasks.firstOrNull()?.subtaskId,
-                    pausedStepId = workflow.steps.firstOrNull()?.stepId
+                    pausedStepId = workflow.steps.firstOrNull()?.stepId,
+                    uncertaintyType = UncertaintyType.MISSING_SLOT
                 )
                 currentSubtaskId = subtasks.firstOrNull()?.subtaskId
                 stepId = workflow.steps.firstOrNull()?.stepId
@@ -242,12 +272,34 @@ class ExecutionEngine(
                     completedStepsCount = 0,
                     expectedPackage = workflow.steps.firstOrNull()?.preconditions?.requiredPackage ?: workflow.appContext
                 )
+                recorder.recordUncertainty(
+                    com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                        executionId = request.executionId,
+                        stepId = workflow.steps.firstOrNull()?.stepId,
+                        uncertaintyType = UncertaintyType.MISSING_SLOT.name,
+                        source = "SLOT_VALIDATOR",
+                        decision = clarReq.reason,
+                        clarificationId = clarReq.clarificationId,
+                        question = clarReq.question,
+                        candidateCount = 0,
+                        finalDisposition = UncertaintyDisposition.CLARIFY.name
+                    )
+                )
                 return finish(ExecutionState.WAITING_FOR_USER, clarReq.reason, clarReq)
             }
 
             val binding = SlotBinder.bind(workflow, currentSlots)
             binding.error?.let { return finish(ExecutionState.FAILED, it) }
             total = binding.steps.size
+            recorder.setBoundSlots(currentSlots)
+            binding.steps.forEachIndexed { idx, st ->
+                recorder.startStep(
+                    stepId = st.source.stepId,
+                    stepIndex = idx,
+                    actionType = st.action.name,
+                    targetDescription = st.selector.text ?: st.selector.contentDescription ?: st.selector.resourceId ?: st.selector.role
+                )
+            }
 
             if (!driver.isReady()) {
                 return finish(ExecutionState.FAILED, "Accessibility service is unavailable. Enable and connect it before execution.")
@@ -321,7 +373,7 @@ class ExecutionEngine(
                     ),
                     diagnostics = emptyList(),
                     stoppedStepId = null
-                )
+                ).also { lastReport = it }
             }
             if (executionId != null && executionId != state.request.executionId) {
                 val err = if (response != null) "Clarification response execution ID does not match active paused execution."
@@ -342,7 +394,7 @@ class ExecutionEngine(
                     ),
                     diagnostics = emptyList(),
                     stoppedStepId = null
-                )
+                ).also { lastReport = it }
             }
             // Check staleness (5 minute timeout)
             if (state.clarificationRequest != null && System.currentTimeMillis() - state.clarificationRequest!!.timestamp > 300_000L) {
@@ -363,7 +415,7 @@ class ExecutionEngine(
                     ),
                     diagnostics = emptyList(),
                     stoppedStepId = null
-                )
+                ).also { lastReport = it }
             }
             running = true
             activePausedState = null
@@ -375,26 +427,144 @@ class ExecutionEngine(
         val workflow = paused.workflow
         val request = paused.request
 
-        if (response != null) {
-            // Security check: Never allow sensitive credentials in clarification
-            val providedVal = response.providedSlotValue
-            if (!providedVal.isNullOrBlank()) {
-                val lower = providedVal.lowercase()
-                if (listOf("password", "pin", "otp", "cvv", "passcode", "secret").any { lower.contains(it) }) {
+        var selectedCandidateIndex: Int? = response?.selectedCandidateIndex
+
+        if (response != null && paused.clarificationRequest != null) {
+            val clarReq = paused.clarificationRequest!!
+            val resolution = NaturalLanguageClarificationResolver.resolve(clarReq, response)
+            when (resolution) {
+                is ClarificationResolutionResult.SensitiveBlock -> {
                     runGate.block("Sensitive credentials provided in clarification. Automated execution terminated.")
+                    recorder.recordUncertainty(
+                        com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                            executionId = paused.request.executionId,
+                            stepId = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                            uncertaintyType = UncertaintyType.SAFETY_BOUNDARY.name,
+                            source = "NATURAL_LANGUAGE_RESOLVER",
+                            decision = resolution.reason,
+                            clarificationId = clarReq.clarificationId,
+                            question = clarReq.question,
+                            candidateCount = 0,
+                            resolution = "[REDACTED_SENSITIVE]",
+                            finalDisposition = UncertaintyDisposition.HANDOFF.name
+                        )
+                    )
                     return recorder.finish(
                         state = ExecutionState.PAUSED_FOR_HANDOFF,
                         completed = paused.completedStepsCount,
                         total = paused.totalSteps,
-                        reason = "Sensitive credentials provided in clarification. Execution halted for security.",
+                        reason = resolution.reason,
                         stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
                     ).also { lastReport = it }
                 }
-            }
-
-            // Apply provided slot value
-            if (!providedVal.isNullOrBlank() && paused.clarificationRequest?.requiredSlot != null) {
-                paused.boundSlots[paused.clarificationRequest!!.requiredSlot!!] = providedVal
+                is ClarificationResolutionResult.AmbiguousReference,
+                is ClarificationResolutionResult.InvalidResponse -> {
+                    val reason = if (resolution is ClarificationResolutionResult.AmbiguousReference) resolution.reason else (resolution as ClarificationResolutionResult.InvalidResponse).reason
+                    val currentAttempt = clarReq.attemptCount
+                    val maxAttempts = clarReq.maxAttempts
+                    if (currentAttempt < maxAttempts) {
+                        val updatedQuestion = if (resolution is ClarificationResolutionResult.AmbiguousReference) {
+                            "Your choice was ambiguous. Please specify more clearly: ${clarReq.question}"
+                        } else {
+                            if (clarReq.candidateDescriptions.isNotEmpty()) {
+                                "I didn't understand that. Please choose from: ${clarReq.candidateDescriptions.joinToString(", ")}"
+                            } else {
+                                "I didn't understand that. Please specify: ${clarReq.question}"
+                            }
+                        }
+                        val updatedReq = clarReq.copy(
+                            attemptCount = currentAttempt + 1,
+                            question = updatedQuestion,
+                            reason = reason
+                        )
+                        paused.clarificationRequest = updatedReq
+                        synchronized(this) { activePausedState = paused; running = false }
+                        recorder.recordUncertainty(
+                            com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                executionId = paused.request.executionId,
+                                stepId = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                                uncertaintyType = if (resolution is ClarificationResolutionResult.AmbiguousReference)
+                                    UncertaintyType.AMBIGUOUS_REFERENCE.name else UncertaintyType.INVALID_RESPONSE.name,
+                                source = "NATURAL_LANGUAGE_RESOLVER",
+                                decision = reason,
+                                clarificationId = updatedReq.clarificationId,
+                                question = updatedReq.question,
+                                candidateCount = updatedReq.candidateDescriptions.size,
+                                attemptNumber = updatedReq.attemptCount,
+                                finalDisposition = UncertaintyDisposition.CLARIFY.name
+                            )
+                        )
+                        return recorder.finish(
+                            state = ExecutionState.WAITING_FOR_USER,
+                            completed = paused.completedStepsCount,
+                            total = paused.totalSteps,
+                            reason = updatedReq.reason,
+                            stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                            clarificationRequest = updatedReq
+                        ).also { lastReport = it }
+                    } else {
+                        // Budget exhausted -> HANDOFF
+                        synchronized(this) { activePausedState = null; running = false }
+                        runGate.block("Clarification attempt budget exhausted ($maxAttempts attempts). Handing off to user.")
+                        recorder.recordUncertainty(
+                            com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                executionId = paused.request.executionId,
+                                stepId = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                                uncertaintyType = UncertaintyType.RECOVERY_EXHAUSTED.name,
+                                source = "NATURAL_LANGUAGE_RESOLVER",
+                                decision = "Clarification attempt budget exhausted ($maxAttempts attempts).",
+                                clarificationId = clarReq.clarificationId,
+                                question = clarReq.question,
+                                candidateCount = clarReq.candidateDescriptions.size,
+                                attemptNumber = currentAttempt,
+                                finalDisposition = UncertaintyDisposition.HANDOFF.name
+                            )
+                        )
+                        return recorder.finish(
+                            state = ExecutionState.PAUSED_FOR_HANDOFF,
+                            completed = paused.completedStepsCount,
+                            total = paused.totalSteps,
+                            reason = "Clarification attempt budget exhausted ($maxAttempts attempts). Handing off to user.",
+                            stoppedStep = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId
+                        ).also { lastReport = it }
+                    }
+                }
+                is ClarificationResolutionResult.ResolvedSlot -> {
+                    paused.boundSlots[resolution.slot] = resolution.value
+                    recorder.recordUncertainty(
+                        com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                            executionId = paused.request.executionId,
+                            stepId = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                            uncertaintyType = UncertaintyType.MISSING_SLOT.name,
+                            source = "NATURAL_LANGUAGE_RESOLVER",
+                            decision = "Resolved slot '${resolution.slot}'.",
+                            clarificationId = clarReq.clarificationId,
+                            question = clarReq.question,
+                            candidateCount = 0,
+                            resolution = resolution.value,
+                            resolutionConfidence = resolution.confidence,
+                            finalDisposition = UncertaintyDisposition.CONTINUE.name
+                        )
+                    )
+                }
+                is ClarificationResolutionResult.ResolvedCandidate -> {
+                    selectedCandidateIndex = resolution.index
+                    recorder.recordUncertainty(
+                        com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                            executionId = paused.request.executionId,
+                            stepId = paused.workflow.steps.getOrNull(paused.pausedStepIndex)?.stepId,
+                            uncertaintyType = UncertaintyType.AMBIGUOUS_TARGET.name,
+                            source = "NATURAL_LANGUAGE_RESOLVER",
+                            decision = "Resolved candidate ${resolution.index}: ${resolution.description}",
+                            clarificationId = clarReq.clarificationId,
+                            question = clarReq.question,
+                            candidateCount = clarReq.candidateDescriptions.size,
+                            resolution = resolution.description,
+                            resolutionConfidence = resolution.confidence,
+                            finalDisposition = UncertaintyDisposition.CONTINUE.name
+                        )
+                    )
+                }
             }
         }
 
@@ -434,6 +604,17 @@ class ExecutionEngine(
             ).also { lastReport = it }
         }
 
+        // Stale UI candidate context validation
+        if (paused.clarificationRequest?.candidateDescriptions?.isNotEmpty() == true) {
+            val liveTexts = currentUi.state.allElements.mapNotNull { it.text ?: it.contentDescription ?: it.resourceId }
+            val prevCandidates = paused.clarificationRequest!!.candidateDescriptions
+            val stillPresent = prevCandidates.any { cand -> liveTexts.any { cand.contains(it, ignoreCase = true) } }
+            if (!stillPresent && liveTexts.isNotEmpty()) {
+                // Stale candidate context invalidated; fresh observation will re-evaluate on current UI
+                selectedCandidateIndex = null
+            }
+        }
+
         if (paused.expectedPackage != null && (currentUi.state.appContext != paused.expectedPackage || isOwnApp(currentUi.state.appContext))) {
             synchronized(this) { activePausedState = paused; running = false }
             return recorder.finish(
@@ -462,7 +643,7 @@ class ExecutionEngine(
                 initialCompleted = paused.completedStepsCount,
                 total = binding.steps.size,
                 currentSlots = paused.boundSlots,
-                selectedCandidateIndex = response?.selectedCandidateIndex
+                selectedCandidateIndex = selectedCandidateIndex
             )
         } catch (_: Exception) {
             runGate.block("Runtime observation or execution failed upon resume.")
@@ -585,6 +766,16 @@ class ExecutionEngine(
                 }
 
                 var verified = false
+                var scrollAttempts = 0
+                var stepHadRecovery = false
+                var stepHadClarification = false
+
+                recorder.startStep(
+                    stepId = step.source.stepId,
+                    stepIndex = sIndex,
+                    actionType = step.action.name,
+                    targetDescription = step.selector.text ?: step.selector.contentDescription ?: step.selector.resourceId ?: step.selector.role
+                )
 
                 for (attempt in 0..recovery.retryLimit(step.source.recoveryPolicy)) {
                     blocked()?.let { return it }
@@ -598,7 +789,7 @@ class ExecutionEngine(
                     var before = driver.observe()
 
                     val isTargetForeground = before != null &&
-                        before.state.appContext == expectedPackage &&
+                        (before.state.appContext == expectedPackage || isAppMatching(expectedPackage, before.state.appContext)) &&
                         !isOwnApp(before.state.appContext)
 
                     if (!isTargetForeground) {
@@ -669,13 +860,36 @@ class ExecutionEngine(
                     )
 
                     if (before == null) return finish(ExecutionState.PAUSED_FOR_HANDOFF, "No inspectable active window is available.")
-                    runGate.check(workflow.safetyBoundary, before, step)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
+                    runGate.check(workflow.safetyBoundary, before, step)?.let { blockReason ->
+                        recorder.recordSafetyEvent(stepId, "BLOCKED", blockReason)
+                        recorder.completeStep(step.source.stepId, StepExecutionStatus.SAFETY_BLOCKED, blockReason)
+                        recorder.recordUncertainty(
+                            com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                executionId = request.executionId,
+                                stepId = stepId,
+                                uncertaintyType = UncertaintyType.SAFETY_BOUNDARY.name,
+                                source = "SAFETY_GATE",
+                                decision = blockReason,
+                                clarificationId = null,
+                                question = null,
+                                candidateCount = 0,
+                                finalDisposition = UncertaintyDisposition.HANDOFF.name
+                            )
+                        )
+                        return finish(ExecutionState.PAUSED_FOR_HANDOFF, blockReason)
+                    }
                     preconditions.evaluate(step.preconditions, before, workflow.appContext, step.stateEvidence)?.let {
                         return finish(ExecutionState.PAUSED_FOR_HANDOFF, it)
                     }
                     verifier.startingStateError(step, before)?.let { return finish(ExecutionState.PAUSED_FOR_HANDOFF, it) }
 
                     var match = matcher.match(step.selector, before, step.action)
+                    recorder.recordTargetResolution(
+                        stepId = stepId,
+                        status = match.status.name,
+                        confidence = match.best?.confidence ?: 0.0,
+                        targetDescription = match.best?.let { "${it.element.role}: ${it.element.text ?: it.element.contentDescription ?: it.element.resourceId ?: ""}".trim() }
+                    )
 
                     var effectiveStep = step
                     val candidateList = listOfNotNull(match.best, match.second)
@@ -702,18 +916,32 @@ class ExecutionEngine(
                     }
 
                     if (match.status == MatchStatus.AMBIGUOUS || match.status == MatchStatus.WEAK) {
-                        val candidates = candidateList.mapNotNull {
-                            val t = it.element.text ?: it.element.contentDescription ?: it.element.resourceId
-                            if (!t.isNullOrBlank()) "${it.element.role}: $t" else null
+                        val candidates = candidateList.mapIndexed { idx, cand ->
+                            val t = cand.element.text ?: cand.element.contentDescription ?: cand.element.resourceId ?: "Item ${idx + 1}"
+                            ClarificationCandidate(
+                                index = idx,
+                                description = "${cand.element.role}: $t",
+                                semanticRole = cand.element.role,
+                                semanticText = t
+                            )
+                        }
+                        val candidateDescs = candidates.map { it.description }
+                        val targetTerm = step.selector.text ?: step.selector.role.ifBlank { "option" }
+                        val question = if (candidates.size == 2) {
+                            "I found two candidates matching '$targetTerm'. Which one do you want?"
+                        } else {
+                            "Multiple candidates matching '$targetTerm' were found on screen. Which one do you want?"
                         }
                         val clarReq = ClarificationRequest(
                             schemaVersion = "1.0",
                             executionId = request.executionId,
                             reason = match.reason,
-                            question = "Multiple possible matches were found on screen. Which one do you want?",
-                            candidateDescriptions = candidates,
+                            question = question,
+                            candidateDescriptions = candidateDescs,
+                            candidates = candidates,
                             pausedSubtaskId = subtask.subtaskId,
-                            pausedStepId = stepId
+                            pausedStepId = stepId,
+                            uncertaintyType = if (match.status == MatchStatus.AMBIGUOUS) UncertaintyType.AMBIGUOUS_TARGET else UncertaintyType.WEAK_TARGET_AMBIGUITY
                         )
                         if (pIdx >= 0) {
                             subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.WAITING_FOR_USER)
@@ -736,22 +964,50 @@ class ExecutionEngine(
                             completedStepsCount = completed,
                             expectedPackage = expectedPackage
                         )
+                        stepHadClarification = true
+                        recorder.recordClarificationForStep(stepId)
+                        recorder.completeStep(step.source.stepId, StepExecutionStatus.WAITING_FOR_USER, match.reason)
+                        recorder.recordUncertainty(
+                            com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                executionId = request.executionId,
+                                stepId = stepId,
+                                uncertaintyType = clarReq.uncertaintyType.name,
+                                source = "SEMANTIC_MATCHER",
+                                decision = match.reason,
+                                clarificationId = clarReq.clarificationId,
+                                question = clarReq.question,
+                                candidateCount = candidates.size,
+                                finalDisposition = UncertaintyDisposition.CLARIFY.name
+                            )
+                        )
                         recorder.decision(stepId, ExecutionState.WAITING_FOR_USER, DecisionType.ASK_USER, match.reason, match.best?.confidence ?: 0.0)
                         return finish(ExecutionState.WAITING_FOR_USER, match.reason, clarReq)
                     }
 
                     var attempted = false
                     var failure = match.reason
+                    var lastVerification: VerificationResult? = null
 
                     if (match.status == MatchStatus.MATCHED) {
                         recorder.decision(stepId, ExecutionState.EXECUTING_STEP, DecisionType.EXECUTE, match.reason, match.best!!.confidence)
                         val action = executor.execute(driver, effectiveStep, before, workflow.appContext, workflow.safetyBoundary, runGate)
                         attempted = action.attempted
                         failure = action.reason
+                        val actionOutcomeStr = if (action.accepted) "ACCEPTED" else if (action.attempted) "REJECTED" else "NOT_ATTEMPTED"
+                        recorder.recordActionOutcome(stepId, actionOutcomeStr, action.reason)
                         if (attempted) {
                             val actionId = recorder.action(effectiveStep)
                             recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, action.reason)
                             val verification = verifier.verify(driver, action.before ?: before, effectiveStep, workflow.safetyBoundary, runGate)
+                            lastVerification = verification
+                            recorder.recordVerification(stepId, verification)
+                            recorder.recordStepVerificationOutcome(
+                                stepId = stepId,
+                                verificationStatus = verification.status.name,
+                                beforeStateId = (action.before ?: before).state.stateId,
+                                afterStateId = verification.after?.state?.stateId,
+                                reason = verification.reason
+                            )
                             verification.after?.let { recorder.transition(actionId, action.before ?: before, it) }
                             blocked()?.let { return it }
                             if (action.accepted && verification.verified) {
@@ -762,6 +1018,11 @@ class ExecutionEngine(
                                     knownStates[label] = TransitionVerifier.fingerprint(verification.after!!)
                                 }
                                 recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, verification.reason, evidence = verification.evidenceResult)
+                                recorder.completeStep(
+                                    stepId = step.source.stepId,
+                                    status = if (stepHadRecovery) StepExecutionStatus.RECOVERED else StepExecutionStatus.COMPLETED,
+                                    reason = verification.reason
+                                )
                                 break
                             }
                             failure = if (!action.accepted) action.reason else verification.reason
@@ -770,15 +1031,44 @@ class ExecutionEngine(
 
                     blocked()?.let { return it }
 
-                    // Subtask-local recovery: If action was attempted, uncertain side effect prevents automatic retry
-                    val next = recovery.decideSubtaskRecovery(
+                    // Closed-loop Recovery Evaluation (Phase 4.8)
+                    val currentUi = driver.observe()
+                    val rematch = if (currentUi != null) matcher.match(effectiveStep.selector, currentUi, effectiveStep.action) else null
+                    val verificationForRecovery = lastVerification ?: VerificationResult(
+                        verified = false,
+                        reason = failure,
+                        status = if (match.status != MatchStatus.MATCHED) VerificationStatus.NOT_VERIFIED else VerificationStatus.UNEXPECTED_TRANSITION
+                    )
+
+                    val next = recovery.decideRecovery(
                         policy = step.source.recoveryPolicy,
+                        verification = verificationForRecovery,
+                        actionOutcome = if (attempted) ActionOutcome(attempted, accepted = false, reason = failure) else null,
+                        currentUi = currentUi,
                         retries = attempt,
-                        actionAttempted = attempted,
-                        targetAbsentOrAmbiguous = (match.status != MatchStatus.MATCHED),
-                        isAmbiguousMatch = false,
-                        isNonSideEffecting = false,
-                        safetyBlocked = runGate.reason() != null
+                        targetMatch = rematch,
+                        isSensitive = verificationForRecovery.isSensitive || currentUi?.state?.isSensitiveContext == true || currentUi?.credentialFieldPresent == true,
+                        safetyBlocked = runGate.reason() != null,
+                        scrollCount = scrollAttempts
+                    )
+
+                    stepHadRecovery = true
+                    recorder.recordRecoveryForStep(stepId)
+                    recorder.recordRecovery(
+                        RecoveryRecord(
+                            executionId = request.executionId,
+                            workflowId = workflow.skillId,
+                            workflowStepId = step.source.stepId,
+                            attemptNumber = attempt + 1,
+                            originalAction = step.action.name,
+                            actionOutcome = if (attempted) "FAILED" else "NOT_ATTEMPTED",
+                            verificationStatus = verificationForRecovery.status,
+                            currentStateId = currentUi?.state?.stateId,
+                            recoveryStrategy = step.source.recoveryPolicy.strategy.name,
+                            recoveryReason = next.reason,
+                            recoveryAction = next.action.name,
+                            finalRecoveryStatus = next.action.name
+                        )
                     )
 
                     when (next.action) {
@@ -786,15 +1076,158 @@ class ExecutionEngine(
                             recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.RECOVER, next.reason)
                             driver.awaitChange(next.delayMs)
                         }
+                        RecoveryAction.REOBSERVE -> {
+                            recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.RECOVER, next.reason)
+                            driver.awaitChange(next.delayMs)
+                            val settledUi = driver.observe()
+                            if (settledUi != null) {
+                                val settledVerification = verifier.verifyStateTransition(before, effectiveStep, settledUi)
+                                if (settledVerification.verified) {
+                                    completed++
+                                    verified = true
+                                    completedStepIds.add(step.source.stepId)
+                                    step.transition.toState?.let { label ->
+                                        knownStates[label] = TransitionVerifier.fingerprint(settledUi)
+                                    }
+                                    recorder.recordStepVerificationOutcome(
+                                        stepId = stepId,
+                                        verificationStatus = settledVerification.status.name,
+                                        beforeStateId = before.state.stateId,
+                                        afterStateId = settledUi.state.stateId,
+                                        reason = settledVerification.reason
+                                    )
+                                    recorder.completeStep(
+                                        stepId = step.source.stepId,
+                                        status = StepExecutionStatus.RECOVERED,
+                                        reason = settledVerification.reason
+                                    )
+                                    recorder.decision(stepId, ExecutionState.WAITING_TRANSITION, DecisionType.PROCEED, settledVerification.reason, evidence = settledVerification.evidenceResult)
+                                    break
+                                }
+                            }
+                        }
+                        RecoveryAction.SCROLL -> {
+                            scrollAttempts++
+                            recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.RECOVER, next.reason)
+                            val scrollStep = effectiveStep.copy(action = RuntimeAction.SCROLL, scrollDirection = "forward")
+                            executor.execute(driver, scrollStep, currentUi ?: before, workflow.appContext, workflow.safetyBoundary, runGate)
+                            driver.awaitChange(next.delayMs)
+                        }
+                        RecoveryAction.NAVIGATE_BACK -> {
+                            recorder.decision(stepId, ExecutionState.MATCHING_STATE, DecisionType.RECOVER, next.reason)
+                            val backStep = effectiveStep.copy(action = RuntimeAction.BACK)
+                            executor.execute(driver, backStep, currentUi ?: before, workflow.appContext, workflow.safetyBoundary, runGate)
+                            driver.awaitChange(next.delayMs)
+                        }
                         RecoveryAction.ASK_USER -> {
+                            val recoveryCandidates = listOfNotNull(rematch?.best, rematch?.second).mapIndexed { idx, cand ->
+                                val t = cand.element.text ?: cand.element.contentDescription ?: cand.element.resourceId ?: "Item ${idx + 1}"
+                                ClarificationCandidate(
+                                    index = idx,
+                                    description = "${cand.element.role}: $t",
+                                    semanticRole = cand.element.role,
+                                    semanticText = t
+                                )
+                            }
+                            val candidateDescs = recoveryCandidates.map { it.description }
+                            val targetTerm = effectiveStep.selector.text ?: effectiveStep.selector.role.ifBlank { "option" }
+                            val clarReq = ClarificationRequest(
+                                schemaVersion = "1.0",
+                                executionId = request.executionId,
+                                reason = next.reason,
+                                question = "Target is ambiguous during recovery for '$targetTerm'. Which one do you want?",
+                                candidateDescriptions = candidateDescs,
+                                candidates = recoveryCandidates,
+                                pausedSubtaskId = subtask.subtaskId,
+                                pausedStepId = stepId,
+                                uncertaintyType = UncertaintyType.AMBIGUOUS_TARGET
+                            )
+                            if (pIdx >= 0) {
+                                subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(status = ProgressStatus.WAITING_FOR_USER)
+                            }
+                            activePausedState = PausedExecutionState(
+                                request = request,
+                                workflow = workflow,
+                                boundSlots = currentSlots,
+                                subtasks = subtasks,
+                                pausedSubtaskIndex = stIndex,
+                                pausedStepIndex = sIndex,
+                                completedSubtaskIds = completedSubtaskIds,
+                                completedStepIds = completedStepIds,
+                                subtaskProgressList = subtaskProgressList,
+                                knownStates = knownStates,
+                                clarificationRequest = clarReq,
+                                runGate = runGate,
+                                recorder = recorder,
+                                totalSteps = total,
+                                completedStepsCount = completed,
+                                expectedPackage = expectedPackage
+                            )
+                            stepHadClarification = true
+                            recorder.recordClarificationForStep(stepId)
+                            recorder.completeStep(step.source.stepId, StepExecutionStatus.WAITING_FOR_USER, next.reason)
+                            recorder.recordUncertainty(
+                                com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                    executionId = request.executionId,
+                                    stepId = stepId,
+                                    uncertaintyType = UncertaintyType.AMBIGUOUS_TARGET.name,
+                                    source = "RECOVERY_CONTROLLER",
+                                    decision = next.reason,
+                                    clarificationId = clarReq.clarificationId,
+                                    question = clarReq.question,
+                                    candidateCount = recoveryCandidates.size,
+                                    finalDisposition = UncertaintyDisposition.CLARIFY.name
+                                )
+                            )
+                            return finish(ExecutionState.WAITING_FOR_USER, next.reason, clarReq)
+                        }
+                        RecoveryAction.HANDOFF -> {
+                            recorder.completeStep(step.source.stepId, StepExecutionStatus.HANDED_OFF, next.reason)
+                            recorder.recordUncertainty(
+                                com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                    executionId = request.executionId,
+                                    stepId = stepId,
+                                    uncertaintyType = if (verificationForRecovery.isSensitive || currentUi?.state?.isSensitiveContext == true || runGate.reason() != null)
+                                        UncertaintyType.SAFETY_BOUNDARY.name else UncertaintyType.RECOVERY_EXHAUSTED.name,
+                                    source = "RECOVERY_CONTROLLER",
+                                    decision = next.reason,
+                                    clarificationId = null,
+                                    question = null,
+                                    candidateCount = 0,
+                                    finalDisposition = UncertaintyDisposition.HANDOFF.name
+                                )
+                            )
                             return finish(ExecutionState.PAUSED_FOR_HANDOFF, "$failure ${next.reason}")
                         }
-                        RecoveryAction.HANDOFF -> return finish(ExecutionState.PAUSED_FOR_HANDOFF, "$failure ${next.reason}")
-                        RecoveryAction.ABORT -> return finish(ExecutionState.ABORTED, "$failure ${next.reason}")
+                        RecoveryAction.ABORT -> {
+                            recorder.completeStep(step.source.stepId, StepExecutionStatus.FAILED, next.reason)
+                            recorder.recordUncertainty(
+                                com.chockXlate.teachablevoice.runtime.trace.UncertaintyRecord(
+                                    executionId = request.executionId,
+                                    stepId = stepId,
+                                    uncertaintyType = UncertaintyType.UNSUPPORTED_CAPABILITY.name,
+                                    source = "RECOVERY_CONTROLLER",
+                                    decision = next.reason,
+                                    clarificationId = null,
+                                    question = null,
+                                    candidateCount = 0,
+                                    finalDisposition = UncertaintyDisposition.ABORT.name
+                                )
+                            )
+                            return finish(ExecutionState.ABORTED, "$failure ${next.reason}")
+                        }
                     }
                 }
 
                 if (!verified) {
+                    recorder.completeStep(
+                        stepId = step.source.stepId,
+                        status = when {
+                            runGate.reason() != null -> StepExecutionStatus.SAFETY_BLOCKED
+                            else -> StepExecutionStatus.FAILED
+                        },
+                        reason = "The bounded attempt budget was exhausted without verified completion."
+                    )
                     if (pIdx >= 0) {
                         subtaskProgressList[pIdx] = subtaskProgressList[pIdx].copy(
                             status = ProgressStatus.FAILED,
@@ -849,6 +1282,13 @@ class ExecutionEngine(
                 pkg.contains("launcher") || pkg.endsWith(".home") || pkg.contains(".home.") ||
                 pkg.endsWith(".launcher3") || pkg.contains("nexuslauncher") || pkg.contains("quickstep") ||
                 pkg.contains("recents") || pkg.contains("overview")
+        }
+
+        fun isAppMatching(expected: String, actual: String): Boolean {
+            if (expected.equals(actual, ignoreCase = true)) return true
+            val expNorm = expected.lowercase().removePrefix("com.").removePrefix("in.").removeSuffix(".android")
+            val actNorm = actual.lowercase().removePrefix("com.").removePrefix("in.").removeSuffix(".android")
+            return expNorm.contains(actNorm) || actNorm.contains(expNorm)
         }
     }
 }

@@ -57,11 +57,11 @@ class GenericDemonstrationScenarioTest {
         val t0 = 1000L
 
         // Voice utterance
-        val voice = VoiceEvent("v1", t0, "Search for an item")
+        val voice = VoiceEvent(eventId = "v1", timestamp = t0, transcript = "Search for an item")
 
         // 1. Opens search
         val openSearchAction = createActionEvent("a1_open", t0 + 100L, "CLICK", "Button", "Search", "com.example.genericapp:id/btn_open_search")
-        val stateEv1 = StateEvent("s1", t0 + 110L, createDummyState("s_home"), createDummyState("s_search_screen"), "a1_open")
+        val stateEv1 = StateEvent(stateEventId = "s1", timestamp = t0 + 110L, beforeState = createDummyState("s_home"), afterState = createDummyState("s_search_screen"), causeActionId = "a1_open")
 
         // 2. Accidentally scrolls
         val accidentalScroll = createActionEvent("a2_scroll", t0 + 200L, "SCROLL", "ScrollView", null, "com.example.genericapp:id/scroll_view")
@@ -77,15 +77,13 @@ class GenericDemonstrationScenarioTest {
 
         // 6. Returns to workflow & 7. Performs selection
         val selectItem = createActionEvent("a6_select", t0 + 600L, "CLICK", "TextView", "Wireless Headphones Pro", "com.example.genericapp:id/item_title")
-        val stateEv2 = StateEvent("s2", t0 + 610L, createDummyState("s_search_screen"), createDummyState("s_detail_screen"), "a6_select")
+        val stateEv2 = StateEvent(stateEventId = "s2", timestamp = t0 + 610L, beforeState = createDummyState("s_search_screen"), afterState = createDummyState("s_detail_screen"), causeActionId = "a6_select")
 
         val trace = DemonstrationTrace(
             schemaVersion = "1.0",
             traceId = "scenario_search_item",
-            sessionId = "session_generic_1",
+            timestamp = t0,
             appContext = "com.example.genericapp",
-            startTime = t0,
-            endTime = t0 + 700L,
             traceEvents = listOf(
                 TraceEvent.Voice("v1", t0, voice),
                 TraceEvent.Action("a1_open", t0 + 100L, openSearchAction),

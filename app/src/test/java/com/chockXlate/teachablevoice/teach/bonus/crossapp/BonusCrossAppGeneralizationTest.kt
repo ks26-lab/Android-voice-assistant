@@ -23,8 +23,8 @@ class BonusCrossAppGeneralizationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_1_input",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.EditText",
                         text = "Search field",
                         contentDescription = "Search input box",
@@ -33,8 +33,8 @@ class BonusCrossAppGeneralizationTest {
                 ),
                 WorkflowStep(
                     stepId = "step_2_click_result",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.TextView",
                         text = "Search Result Item",
                         contentDescription = "Item card view",
@@ -241,16 +241,16 @@ class BonusCrossAppGeneralizationTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "s1",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.EditText",
                         textSlot = "search_query"
                     )
                 ),
                 WorkflowStep(
                     stepId = "s2",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.TextView",
                         text = "Search Result Item"
                     )

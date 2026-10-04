@@ -33,6 +33,74 @@ object WorkflowSynthesizer {
         "ssn", "cvv2", "credit_card", "debit_card", "payment_confirm"
     )
 
+    fun synthesizeFromTrace(
+        trace: DemonstrationTrace,
+        targetSkillId: String? = null,
+        targetSkillName: String? = null,
+        targetSkillDescription: String? = null
+    ): WorkflowSynthesisResult {
+        val filterResult = DemonstrationFilter.filter(trace, targetSkillName, targetSkillDescription)
+        val semanticActions = com.chockXlate.teachablevoice.learning.actions.SemanticActionExtractor.extract(trace, filterResult)
+        val rawIntentResult = com.chockXlate.teachablevoice.learning.intent.IntentExtractor.extract(trace, semanticActions)
+        
+        val finalIntentResult = if (targetSkillDescription != null && targetSkillDescription.isNotBlank()) {
+            val understood = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.understandCommand(targetSkillDescription)
+            val userIntent = if (understood.intent.canonicalName != "unknown") understood.intent.canonicalName
+                else com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.canonicalizeIntent(targetSkillDescription)
+            if (userIntent.isNotBlank() && !userIntent.equals("unknown", ignoreCase = true)) {
+                rawIntentResult.copy(
+                    intent = rawIntentResult.intent.copy(canonicalName = userIntent),
+                    confidence = 1.0
+                )
+            } else {
+                rawIntentResult
+            }
+        } else if (targetSkillName != null && targetSkillName.isNotBlank()) {
+            val understood = com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.understandCommand(targetSkillName)
+            val userIntent = if (understood.intent.canonicalName != "unknown") understood.intent.canonicalName
+                else com.chockXlate.teachablevoice.command.interpretation.SemanticCommandPolicy.canonicalizeIntent(targetSkillName)
+            if (userIntent.isNotBlank() && !userIntent.equals("unknown", ignoreCase = true)) {
+                rawIntentResult.copy(
+                    intent = rawIntentResult.intent.copy(canonicalName = userIntent),
+                    confidence = 1.0
+                )
+            } else {
+                rawIntentResult
+            }
+        } else {
+            rawIntentResult
+        }
+
+        val slotResult = com.chockXlate.teachablevoice.learning.slots.SlotExtractor.extract(trace, semanticActions, finalIntentResult)
+        val dataset = com.chockXlate.teachablevoice.learning.alignment.DemonstrationDataset(
+            demonstrationId = trace.traceId,
+            traceId = trace.traceId,
+            intentResult = finalIntentResult,
+            slotResult = slotResult
+        )
+        val alignmentResult = com.chockXlate.teachablevoice.learning.alignment.DemonstrationAlignment.align(listOf(dataset))
+        val inferenceResult = com.chockXlate.teachablevoice.learning.inference.ConstantVariableInference.infer(listOf(dataset))
+
+        val result = synthesize(
+            intentResult = finalIntentResult,
+            semanticActions = semanticActions,
+            slotResult = slotResult,
+            alignmentResult = alignmentResult,
+            inferenceResult = inferenceResult,
+            trace = trace,
+            filterResult = filterResult
+        )
+
+        if (result.workflow != null && (targetSkillId != null || targetSkillName != null)) {
+            val updatedWorkflow = result.workflow.copy(
+                skillId = targetSkillId ?: result.workflow.skillId,
+                name = targetSkillName ?: result.workflow.name
+            )
+            return result.copy(workflow = updatedWorkflow)
+        }
+        return result
+    }
+
     fun synthesize(
         intentResult: IntentExtractionResult,
         semanticActions: List<SemanticAction>,
@@ -43,6 +111,7 @@ object WorkflowSynthesizer {
         filterResult: com.chockXlate.teachablevoice.contract.filter.FilteredDemonstrationResult? = null
     ): WorkflowSynthesisResult {
         val diagnostics = mutableListOf<String>()
+
         val warnings = mutableListOf<String>()
 
         if (inferenceResult.slotInferences.any { it.status == SlotInferenceStatus.CONFLICTING } || slotResult.conflicts.isNotEmpty()) {
@@ -119,6 +188,67 @@ object WorkflowSynthesizer {
                 SlotInferenceStatus.CONFLICTING -> {
                     warnings.add("Slot '$slotName' has CONFLICTING inference status. Retained diagnostic conflict.")
                 }
+            }
+        }
+
+        // Phase 3B: Cross-Platform Platform Variable Inference
+        val isPortableTask = intentName in setOf("order_food", "shop_item", "search_information", "send_message") ||
+            intentName.contains("shop", ignoreCase = true) ||
+            intentName.contains("order", ignoreCase = true)
+
+        if (isPortableTask && workflowSlots.none { it.isPlatformSlot() }) {
+            val demoDesc = trace.description ?: trace.skillName ?: ""
+            val platformFromDesc = Regex("""\b(?:from|on|through|via|using)\s+([A-Za-z0-9_-]+)""", RegexOption.IGNORE_CASE)
+                .find(demoDesc)?.groupValues?.get(1)?.trim()
+            val inferredPlatform = when {
+                !platformFromDesc.isNullOrBlank() && !platformFromDesc.equals("home", true) && !platformFromDesc.equals("cart", true) -> {
+                    platformFromDesc.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+                }
+                trace.appContext.isNotBlank() && trace.appContext != "unknown" && !DemonstrationFilter.isSystemSurface(trace.appContext) && !DemonstrationFilter.isOwnApp(trace.appContext) -> {
+                    val parts = trace.appContext.split('.')
+                    val cand = parts.find { it.length > 3 && it !in setOf("android", "application", "shopping", "app", "mobile", "client", "google") }
+                    cand?.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() } ?: trace.appContext
+                }
+                else -> null
+            }
+
+            if (inferredPlatform != null) {
+                val platSlot = WorkflowSlot(
+                    schemaVersion = "1.0",
+                    name = "platform",
+                    type = com.chockXlate.teachablevoice.contract.workflow.SlotType.PLATFORM,
+                    required = true,
+                    exampleValue = inferredPlatform,
+                    confidence = 1.0,
+                    provenance = "Phase 3B Platform Variable Inference",
+                    role = "target_platform"
+                )
+                variableSlotNames.add("platform")
+                workflowSlots.add(platSlot)
+            }
+        }
+
+        // Infer item slot for portable tasks if user entered text but item was not yet extracted as a variable slot
+        if (isPortableTask && workflowSlots.none { it.name == "item" }) {
+            val textAction = semanticActions.find {
+                it.actionType == com.chockXlate.teachablevoice.learning.actions.SemanticActionType.INPUT_TEXT &&
+                !it.inputValue.isNullOrBlank() &&
+                SENSITIVE_KEYWORDS.none { kw -> it.inputValue?.lowercase()?.contains(kw) == true }
+            }
+            if (textAction?.inputValue != null) {
+                val cleanItem = textAction.inputValue.trim()
+                val itemSlot = WorkflowSlot(
+                    schemaVersion = "1.0",
+                    name = "item",
+                    type = com.chockXlate.teachablevoice.contract.workflow.SlotType.TEXT,
+                    required = true,
+                    exampleValue = cleanItem,
+                    confidence = 1.0,
+                    provenance = "Phase 3B Item Variable Inference",
+                    role = "target_item"
+                )
+                variableSlotNames.add("item")
+                workflowSlots.add(itemSlot)
             }
         }
 

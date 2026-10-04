@@ -24,8 +24,8 @@ class GenericCrossAppScenarioTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_1_search_input",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.EditText",
                         text = "Search catalog",
                         contentDescription = "Search bar",
@@ -34,8 +34,8 @@ class GenericCrossAppScenarioTest {
                 ),
                 WorkflowStep(
                     stepId = "step_2_select_result",
-                    actionType = "CLICK",
-                    targetSelector = SemanticSelector(
+                    semanticAction = "CLICK",
+                    semanticSelector = SemanticSelector(
                         role = "android.widget.TextView",
                         text = "Result Item Title",
                         contentDescription = "Card item",
@@ -92,8 +92,8 @@ class GenericCrossAppScenarioTest {
             steps = listOf(
                 WorkflowStep(
                     stepId = "step_1_search_input",
-                    actionType = "INPUT_TEXT",
-                    targetSelector = SemanticSelector(role = "android.widget.EditText", text = "Search catalog")
+                    semanticAction = "INPUT_TEXT",
+                    semanticSelector = SemanticSelector(role = "android.widget.EditText", text = "Search catalog")
                 )
             )
         )
